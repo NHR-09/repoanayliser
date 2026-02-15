@@ -1,5 +1,6 @@
 from neo4j import GraphDatabase
 from typing import Dict, List
+from pathlib import Path
 import logging
 
 logger = logging.getLogger(__name__)
@@ -69,46 +70,54 @@ class GraphDB:
                 """,
                 from_file=from_file, to_module=to_module
             )
-            # Also try to link to actual files if module matches
+            
+            module_parts = to_module.replace('.', '\\\\')
+            module_name = to_module.split('.')[-1]
+            
             session.run(
                 """
                 MATCH (f:File {path: $from_file})
                 MATCH (target:File)
-                WHERE target.path CONTAINS $to_module OR target.path ENDS WITH $to_module + '.py' OR target.path ENDS WITH $to_module + '.js'
+                WHERE target.path ENDS WITH $module_parts + '.py' 
+                   OR target.path ENDS WITH $module_parts + '.js'
+                   OR target.path ENDS WITH '\\\\' + $module_name + '.py'
+                   OR target.path ENDS WITH '\\\\' + $module_name + '.js'
                 MERGE (f)-[:DEPENDS_ON]->(target)
                 """,
-                from_file=from_file, to_module=to_module
+                from_file=from_file, 
+                module_parts=module_parts,
+                module_name=module_name
             )
     
     def get_dependencies(self, file_path: str) -> List[str]:
+        normalized = self._normalize_path(file_path)
         with self.driver.session() as session:
-            # Try both exact path and path matching
             result = session.run(
                 """
                 MATCH (f:File)
-                WHERE f.path = $path OR f.path ENDS WITH $path OR f.path CONTAINS $path
+                WHERE f.path = $path OR f.path ENDS WITH $suffix
                 OPTIONAL MATCH (f)-[:IMPORTS]->(m:Module)
                 OPTIONAL MATCH (f)-[:DEPENDS_ON]->(dep:File)
-                WITH f, COLLECT(DISTINCT m.name) + COLLECT(DISTINCT dep.path) as dependencies
-                RETURN dependencies
-                LIMIT 1
+                RETURN COLLECT(DISTINCT m.name) + COLLECT(DISTINCT dep.path) as dependencies
                 """,
-                path=file_path.replace('/', '\\')
+                path=normalized,
+                suffix=self._get_path_suffix(file_path)
             )
             record = result.single()
             return [d for d in record["dependencies"] if d] if record else []
     
     def get_affected_files(self, file_path: str) -> List[str]:
+        normalized = self._normalize_path(file_path)
         with self.driver.session() as session:
-            # Files that import this file (reverse dependencies)
             result = session.run(
                 """
                 MATCH (target:File)
-                WHERE target.path = $path OR target.path ENDS WITH $path OR target.path CONTAINS $path
+                WHERE target.path = $path OR target.path ENDS WITH $suffix
                 MATCH (f:File)-[:DEPENDS_ON|IMPORTS*1..3]->(target)
                 RETURN DISTINCT f.path as path
                 """,
-                path=file_path.replace('/', '\\')
+                path=normalized,
+                suffix=self._get_path_suffix(file_path)
             )
             return [record["path"] for record in result]
     
@@ -130,3 +139,23 @@ class GraphDB:
                 path=file_path.split('\\')[-1]  # Just filename
             )
             return [dict(record) for record in result]
+    
+    def get_all_files(self) -> List[str]:
+        """Get all file paths stored in graph"""
+        with self.driver.session() as session:
+            result = session.run("MATCH (f:File) RETURN f.path as path ORDER BY f.path")
+            return [record["path"] for record in result]
+    
+    def _normalize_path(self, path: str) -> str:
+        """Normalize path for consistent matching"""
+        try:
+            return str(Path(path).resolve())
+        except:
+            return path
+    
+    def _get_path_suffix(self, path: str) -> str:
+        """Get path suffix for flexible matching"""
+        parts = Path(path).parts
+        if len(parts) >= 3:
+            return str(Path(*parts[-3:]))
+        return str(Path(path).name)

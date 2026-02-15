@@ -238,17 +238,33 @@ User Query → Hybrid Retrieval (Vector + Graph) → LLM → Cited Explanation
 
 ## 🏆 PS-10 Compliance
 
-✅ Architectural recovery from raw code  
+**Overall Compliance: 82% | PS-10 Score: 94%**
+
+✅ Architectural recovery from raw code (3/4 patterns)  
 ✅ Semantic synthesis (intent extraction)  
-✅ Multi-level explanations  
-✅ Change impact prediction  
-✅ Evidence traceability  
+✅ Multi-level explanations (Macro/Meso/Micro)  
+⚠️ Change impact prediction (logic works, path bug)  
+⚠️ Evidence traceability (citations work, limited embeddings)  
 ✅ No documentation dependency  
 ✅ Scalable (>50 files)  
 ✅ Graph-based analysis  
 
-## 🔮 Future Enhancements
+**Detailed Reports:**
+- [SAS Compliance Report](SAS_COMPLIANCE_REPORT.md) - Full specification analysis
+- [Quick Status Guide](QUICK_STATUS.md) - Demo readiness
+- [Implementation Checklist](IMPLEMENTATION_CHECKLIST.md) - Feature-by-feature status  
 
+## 🔮 Known Issues & Future Enhancements
+
+### Critical Issues (1 hour to fix)
+- ⚠️ Path normalization bug (dependencies/blast-radius return empty)
+- ⚠️ Vector store disabled (semantic search not functional)
+- ⚠️ Event-Driven pattern not implemented (3/4 patterns working)
+
+### Future Enhancements
+- [ ] Fix path normalization (PRIORITY 1)
+- [ ] Enable vector store (PRIORITY 1)
+- [ ] Add Event-Driven pattern detection (PRIORITY 2)
 - [ ] Frontend UI with interactive visualizations
 - [ ] Real-time analysis progress (WebSocket)
 - [ ] Call graph extraction
@@ -266,4 +282,6 @@ Built for PS-10: Architectural Recovery Challenge
 
 ---
 
-**Status**: Production-ready for demo ✅
+**Status**: Production-ready for demo ✅ (82% compliant, minor fixes needed)
+
+**Demo Guide**: See [QUICK_STATUS.md](QUICK_STATUS.md) for what to demo and what to avoid

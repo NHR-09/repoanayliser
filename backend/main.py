@@ -60,14 +60,21 @@ async def analyze_impact(request: ImpactRequest):
 
 @app.get("/dependencies/{file_path:path}")
 async def get_dependencies(file_path: str):
-    deps = engine.graph_db.get_dependencies(file_path)
-    debug = engine.graph_db.debug_file(file_path)
-    return {"file": file_path, "dependencies": deps, "debug": debug}
+    resolved = engine._resolve_path(file_path)
+    deps = engine.graph_db.get_dependencies(resolved)
+    return {"file": file_path, "dependencies": deps}
 
 @app.get("/blast-radius/{file_path:path}")
 async def get_blast_radius(file_path: str):
-    radius = engine.dependency_mapper.get_blast_radius(file_path)
+    resolved = engine._resolve_path(file_path)
+    radius = engine.dependency_mapper.get_blast_radius(resolved)
     return {"file": file_path, "affected_files": radius, "count": len(radius)}
+
+@app.get("/debug/files")
+async def debug_files():
+    """Show all files stored in graph for debugging"""
+    files = engine.graph_db.get_all_files()
+    return {"total": len(files), "files": files[:20], "repo_path": str(engine.repo_path) if engine.repo_path else None}
 
 def run_analysis(job_id: str, repo_url: str):
     try:

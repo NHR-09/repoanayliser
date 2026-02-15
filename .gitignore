@@ -17,9 +17,11 @@ build/
 !.env.example
 
 # Databases
+backend/chroma_db/
 chroma_db/
 *.sqlite3
 *.db
+neo4j/
 
 # IDE
 .vscode/
@@ -30,11 +32,46 @@ chroma_db/
 # Workspace
 backend/workspace/
 workspace/
+repos/
 
 # Logs
 *.log
 logs/
 
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# Test outputs
+test_output/
+*.test
+
 # OS
 .DS_Store
-Thumbs.db
+Thums.db
+
+# Node modules (if frontend added)
+node_modules/
+package-lock.json
+
+# Python virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+.pytest_cache/
+
+# Documentation builds
+docs/_build/
+site/

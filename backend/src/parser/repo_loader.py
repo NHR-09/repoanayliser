@@ -22,16 +22,28 @@ class RepositoryLoader:
             logger.info(f"⚠️  Directory exists, removing: {target_path}")
             import shutil
             import stat
+            import time
             
             def remove_readonly(func, path, _):
                 os.chmod(path, stat.S_IWRITE)
                 func(path)
             
-            shutil.rmtree(target_path, onerror=remove_readonly)
+            try:
+                shutil.rmtree(target_path, onerror=remove_readonly)
+                time.sleep(0.5)  # Wait for filesystem
+            except Exception as e:
+                logger.warning(f"Failed to remove directory: {e}")
+                # Try alternative cleanup
+                import subprocess
+                try:
+                    subprocess.run(['rmdir', '/S', '/Q', str(target_path)], shell=True, check=False)
+                    time.sleep(0.5)
+                except:
+                    pass
         
         logger.info("📥 Cloning repository (this may take a few minutes)...")
         import git
-        git.Repo.clone_from(repo_url, target_path)
+        git.Repo.clone_from(repo_url, target_path, depth=1)  # Shallow clone
         logger.info(f"✅ Repository cloned successfully to: {target_path}")
         
         return target_path

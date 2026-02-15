@@ -29,6 +29,7 @@ class AnalysisEngine:
         self.llm = LLMReasoner()
         self.pattern_detector = None
         self.coupling_analyzer = None
+        self.repo_path = None  # Store repo path for path resolution
     
     def analyze_repository(self, repo_url: str) -> Dict:
         logger.info(f"\n{'='*60}")
@@ -39,6 +40,7 @@ class AnalysisEngine:
         self.vector_store.clear()
         
         repo_path = self.repo_loader.clone_repository(repo_url)
+        self.repo_path = repo_path  # Store for later use
         
         files = self.repo_loader.scan_files(
             repo_path,
@@ -89,16 +91,26 @@ class AnalysisEngine:
         }
     
     def analyze_change_impact(self, file_path: str) -> Dict:
-        affected = self.graph_db.get_affected_files(file_path)
-        blast_radius = self.dependency_mapper.get_blast_radius(file_path)
+        resolved_path = self._resolve_path(file_path)
+        affected = self.graph_db.get_affected_files(resolved_path)
+        blast_radius = self.dependency_mapper.get_blast_radius(resolved_path)
         evidence = self.retrieval_engine.retrieve_evidence(
             f"dependencies and usage of {file_path}",
-            context_file=file_path
+            context_file=resolved_path
         )
         result = self.llm.analyze_impact(file_path, evidence['evidence'], affected)
         result['blast_radius'] = blast_radius
         result['risk_level'] = 'high' if len(blast_radius) > 10 else 'medium' if len(blast_radius) > 5 else 'low'
         return result
+    
+    def _resolve_path(self, file_path: str) -> str:
+        """Convert relative path to absolute path stored in graph"""
+        if self.repo_path and not Path(file_path).is_absolute():
+            # Try to find matching file in repo
+            full_path = self.repo_path / file_path
+            if full_path.exists():
+                return str(full_path)
+        return file_path
     
     def _store_in_graph(self, parsed: Dict):
         self.graph_db.create_file_node(parsed['file'], parsed['language'])
@@ -124,5 +136,37 @@ class AnalysisEngine:
             self.graph_db.create_import_relationship(parsed['file'], imp)
     
     def _store_in_vector(self, parsed: Dict):
-        # Skip vector storage for faster processing
-        pass
+        """Store code in vector database for semantic search"""
+        code_text = self._extract_code_text(parsed)
+        if code_text.strip():
+            self.vector_store.add_code_chunk(
+                chunk_id=parsed['file'],
+                code=code_text,
+                metadata={
+                    'file_path': parsed['file'],
+                    'language': parsed['language'],
+                    'num_classes': len(parsed.get('classes', [])),
+                    'num_functions': len(parsed.get('functions', []))
+                }
+            )
+    
+    def _extract_code_text(self, parsed: Dict) -> str:
+        """Extract meaningful code text for embedding"""
+        parts = []
+        
+        # Add file path as context
+        parts.append(f"File: {parsed['file']}")
+        
+        # Add classes
+        for cls in parsed.get('classes', []):
+            parts.append(f"Class {cls['name']} at line {cls['line']}")
+        
+        # Add functions
+        for func in parsed.get('functions', []):
+            parts.append(f"Function {func['name']} at line {func['line']}")
+        
+        # Add imports
+        if parsed.get('imports'):
+            parts.append(f"Imports: {', '.join(parsed['imports'])}")
+        
+        return '\n'.join(parts)
