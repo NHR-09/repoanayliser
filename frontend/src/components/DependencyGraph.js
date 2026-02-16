@@ -31,6 +31,8 @@ export default function DependencyGraph() {
     const height = 600;
 
     svg.attr('width', width).attr('height', height);
+    
+    const g = svg.append('g');
 
     const simulation = d3.forceSimulation(data.nodes)
       .force('link', d3.forceLink(data.edges).id(d => d.id).distance(100))
@@ -39,7 +41,7 @@ export default function DependencyGraph() {
       .force('collision', d3.forceCollide().radius(40));
 
     // Draw edges
-    const link = svg.append('g')
+    const link = g.append('g')
       .selectAll('line')
       .data(data.edges)
       .enter()
@@ -49,7 +51,7 @@ export default function DependencyGraph() {
       .attr('stroke-opacity', 0.6);
 
     // Draw nodes
-    const node = svg.append('g')
+    const node = g.append('g')
       .selectAll('circle')
       .data(data.nodes)
       .enter()
@@ -62,7 +64,7 @@ export default function DependencyGraph() {
         .on('end', dragEnded));
 
     // Draw labels
-    const labels = svg.append('g')
+    const labels = g.append('g')
       .selectAll('text')
       .data(data.nodes)
       .enter()
@@ -71,6 +73,38 @@ export default function DependencyGraph() {
       .attr('font-size', 10)
       .attr('dx', 12)
       .attr('dy', 4);
+    
+    // Add zoom behavior
+    const zoom = d3.zoom()
+      .scaleExtent([0.1, 4])
+      .on('zoom', (event) => {
+        g.attr('transform', event.transform);
+      });
+    
+    svg.call(zoom);
+    
+    // Fit to view on load
+    setTimeout(() => {
+      try {
+        const bounds = g.node().getBBox();
+        const fullWidth = bounds.width;
+        const fullHeight = bounds.height;
+        const midX = bounds.x + fullWidth / 2;
+        const midY = bounds.y + fullHeight / 2;
+        
+        if (fullWidth > 0 && fullHeight > 0) {
+          const scale = 0.8 / Math.max(fullWidth / width, fullHeight / height);
+          const translate = [width / 2 - scale * midX, height / 2 - scale * midY];
+          
+          svg.transition().duration(750).call(
+            zoom.transform,
+            d3.zoomIdentity.translate(translate[0], translate[1]).scale(scale)
+          );
+        }
+      } catch (e) {
+        console.log('Auto-fit skipped:', e.message);
+      }
+    }, 500);
 
     simulation.on('tick', () => {
       link

@@ -37,7 +37,11 @@ class AnalysisEngine:
         logger.info(f"{'='*60}")
         
         logger.info("🧹 Clearing previous analysis data...")
+        self.graph_db.clear_database()
         self.vector_store.clear()
+        self.dependency_mapper = DependencyMapper()  # Reset NetworkX graph
+        self.pattern_detector = None
+        self.coupling_analyzer = None
         
         repo_path = self.repo_loader.clone_repository(repo_url)
         self.repo_path = repo_path  # Store for later use
@@ -169,6 +173,11 @@ class AnalysisEngine:
         if not function_info:
             return {"error": f"Function '{function_name}' not found"}
         
+        # Read actual function code from file
+        file_path = function_info.get('file')
+        start_line = function_info.get('line', 1)
+        function_code = self._extract_function_code(file_path, function_name, start_line)
+        
         # Get callers (who calls this function)
         callers = self.graph_db.get_function_callers(function_name)
         
@@ -178,18 +187,20 @@ class AnalysisEngine:
             n_results=3
         )
         
-        # Generate LLM explanation
+        # Generate LLM explanation with actual code
         explanation = self.llm.explain_function(
             function_name,
             function_info,
             callers,
-            search_results
+            search_results,
+            function_code
         )
         
         return {
             "function_name": function_name,
-            "file": function_info.get('file'),
-            "line": function_info.get('line'),
+            "file": file_path,
+            "line": start_line,
+            "code": function_code,
             "callers": callers,
             "usage_count": len(callers),
             "explanation": explanation,
@@ -269,3 +280,39 @@ class AnalysisEngine:
             parts.append(f"Imports: {', '.join(parsed['imports'])}")
         
         return '\n'.join(parts)
+    
+    def _extract_function_code(self, file_path: str, function_name: str, start_line: int) -> str:
+        """Extract actual function code from source file"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            # Start from function definition line
+            func_lines = []
+            indent_level = None
+            
+            for i in range(start_line - 1, len(lines)):
+                line = lines[i]
+                
+                # Detect initial indent
+                if indent_level is None and line.strip():
+                    indent_level = len(line) - len(line.lstrip())
+                    func_lines.append(line.rstrip())
+                    continue
+                
+                # Stop at next function/class at same or lower indent
+                if line.strip() and not line.strip().startswith('#'):
+                    current_indent = len(line) - len(line.lstrip())
+                    if current_indent <= indent_level and i > start_line:
+                        break
+                
+                func_lines.append(line.rstrip())
+                
+                # Limit to 50 lines
+                if len(func_lines) >= 50:
+                    func_lines.append('... (truncated)')
+                    break
+            
+            return '\n'.join(func_lines) if func_lines else f"# Function {function_name} (code not extracted)"
+        except Exception as e:
+            return f"# Error reading function code: {str(e)}"

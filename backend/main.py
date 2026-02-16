@@ -85,6 +85,43 @@ async def debug_files():
 @app.get("/graph/data")
 async def get_graph_data():
     """Get nodes and edges for graph visualization"""
+    # Use NetworkX graph which has all dependencies
+    if engine.dependency_mapper and engine.dependency_mapper.graph:
+        nx_graph = engine.dependency_mapper.graph
+        
+        # Filter to only include File nodes (not external modules)
+        file_nodes = [n for n in nx_graph.nodes() if '\\' in n or '/' in n]
+        
+        nodes = []
+        edges = []
+        seen = set()
+        
+        for node in file_nodes[:100]:  # Limit for performance
+            if node not in seen:
+                parts = node.replace('\\', '/').split('/')
+                label = '/'.join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+                nodes.append({'id': node, 'label': label})
+                seen.add(node)
+            
+            # Get edges from this node
+            for target in nx_graph.successors(node):
+                if target in file_nodes and target not in seen:
+                    parts = target.replace('\\', '/').split('/')
+                    label = '/'.join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+                    nodes.append({'id': target, 'label': label})
+                    seen.add(target)
+                
+                if target in file_nodes:
+                    edges.append({
+                        'source': node,
+                        'target': target,
+                        'type': 'imports'
+                    })    
+        
+        
+        return {'nodes': nodes, 'edges': edges}
+    
+    # Fallback to Neo4j
     graph_data = engine.graph_db.get_graph_data()
     return graph_data
 

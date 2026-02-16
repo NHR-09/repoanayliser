@@ -17,17 +17,23 @@ class DependencyMapper:
             self.graph.add_node(file_path, **file_data)
             
             # Build module-to-file mapping
-            # e.g., C:\...\app\routers\auth.py → app.routers.auth
-            if 'app' in file_path:
-                parts = file_path.split('app')[-1].replace('\\', '.').replace('.py', '').replace('.js', '').strip('.')
-                if parts:
-                    file_map[parts] = file_path
-                    # Also add shorter versions
-                    module_parts = parts.split('.')
-                    for i in range(len(module_parts)):
-                        short_key = '.'.join(module_parts[i:])
-                        if short_key not in file_map:
-                            file_map[short_key] = file_path
+            path_obj = Path(file_path)
+            filename = path_obj.stem  # filename without extension
+            
+            # Map: filename → file_path
+            file_map[filename] = file_path
+            
+            # Map: ./filename → file_path (relative imports)
+            file_map[f'./{filename}'] = file_path
+            file_map[f'../{filename}'] = file_path
+            
+            # Map: full relative path from repo root
+            parts = path_obj.parts
+            if len(parts) >= 2:
+                # Get last 2-3 parts for matching
+                for i in range(max(0, len(parts)-3), len(parts)):
+                    rel_path = '/'.join(parts[i:]).replace('.py', '').replace('.js', '').replace('.java', '')
+                    file_map[rel_path] = file_path
         
         logger.info(f"   📋 Built module map with {len(file_map)} entries")
         

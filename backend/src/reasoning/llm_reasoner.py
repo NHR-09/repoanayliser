@@ -29,9 +29,9 @@ class LLMReasoner:
             'evidence': [e['file'] for e in evidence]
         }
     
-    def explain_function(self, function_name: str, function_info: Dict, callers: List[Dict], context: List[Dict]) -> str:
+    def explain_function(self, function_name: str, function_info: Dict, callers: List[Dict], context: List[Dict], function_code: str = None) -> str:
         """Generate LLM explanation for a function"""
-        prompt = self._build_function_prompt(function_name, function_info, callers, context)
+        prompt = self._build_function_prompt(function_name, function_info, callers, context, function_code)
         return self._call_llm(prompt)
     
     def explain_meso_level(self, patterns: Dict, graph_context: str) -> str:
@@ -119,7 +119,7 @@ Evidence:
 
 Explain what consequences this change may have. Cite specific files."""
     
-    def _build_function_prompt(self, function_name: str, function_info: Dict, callers: List[Dict], context: List[Dict]) -> str:
+    def _build_function_prompt(self, function_name: str, function_info: Dict, callers: List[Dict], context: List[Dict], function_code: str = None) -> str:
         """Build prompt for function explanation"""
         caller_text = "\n".join([
             f"- {c['caller_name']} in {c['caller_file']}"
@@ -131,9 +131,11 @@ Explain what consequences this change may have. Cite specific files."""
             for c in context
         ]) if context else "No additional context"
         
+        code_section = f"\n\nActual Function Code:\n```\n{function_code}\n```" if function_code else ""
+        
         return f"""Analyze the function: {function_name}
 
-Location: {function_info.get('file')} (line {function_info.get('line')})
+Location: {function_info.get('file')} (line {function_info.get('line')}){code_section}
 
 Called by:
 {caller_text}
@@ -142,7 +144,7 @@ Related code context:
 {context_text}
 
 Provide:
-1. Purpose of this function
+1. Purpose of this function (based on actual code)
 2. How it's used in the codebase
 3. Impact if modified
 4. Key dependencies
