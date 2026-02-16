@@ -1,0 +1,692 @@
+================================================================================
+                    ARCHITECH - DBMS SCHEMA DOCUMENTATION
+================================================================================
+
+PROJECT: ARCHITECH - Architectural Recovery & Semantic Synthesis Platform
+DOCUMENT: Database Management System Schema
+VERSION: 1.0
+DATE: 2024
+
+================================================================================
+                        TABLE OF CONTENTS
+================================================================================
+
+1. OVERVIEW
+2. NEO4J GRAPH DATABASE SCHEMA
+3. CHROMADB VECTOR DATABASE SCHEMA
+4. DATABASE RELATIONSHIPS
+5. KEY QUERIES AND OPERATIONS
+6. DATA FLOW
+7. INDEXING STRATEGY
+8. BACKUP AND RECOVERY
+
+================================================================================
+                            1. OVERVIEW
+================================================================================
+
+ARCHITECH uses a HYBRID DATABASE ARCHITECTURE:
+
+1. Neo4j Graph Database (Structural Relationships)
+   - Purpose: Store code structure and dependencies
+   - Port: 7687 (Bolt), 7474 (HTTP)
+   - Authentication: neo4j/password
+
+2. ChromaDB Vector Database (Semantic Search)
+   - Purpose: Store code embeddings for semantic retrieval
+   - Storage: Local file system (chroma_db/)
+   - Collection: code_embeddings
+
+DESIGN PHILOSOPHY:
+- Graph DB handles "what connects to what"
+- Vector DB handles "what means what"
+- Backend orchestrates both for hybrid retrieval
+
+================================================================================
+                    2. NEO4J GRAPH DATABASE SCHEMA
+================================================================================
+
+--------------------------------------------------------------------------------
+2.1 NODE TYPES
+--------------------------------------------------------------------------------
+
+NODE: File
+----------
+Properties:
+  - path (STRING, UNIQUE): Absolute file path
+  - language (STRING): Programming language (python, javascript, java)
+  - repo_id (STRING): Repository identifier
+  - snapshot_id (STRING): Analysis snapshot identifier
+  - content_hash (STRING): SHA-256 hash of file content
+  - last_modified (DATETIME): Last modification timestamp
+
+Example:
+  (:File {
+    path: "C:\\workspace\\flask\\app.py",
+    language: "python",
+    repo_id: "flask_main",
+    snapshot_id: "snap_001",
+    content_hash: "a3f5b2c...",
+    last_modified: "2024-01-15T10:30:00"
+  })
+
+NODE: Class
+-----------
+Properties:
+  - name (STRING): Class name
+  - file (STRING): File path containing the class
+  - line (INTEGER): Line number where class is defined
+  - repo_id (STRING): Repository identifier
+  - snapshot_id (STRING): Analysis snapshot identifier
+
+Example:
+  (:Class {
+    name: "UserService",
+    file: "C:\\workspace\\flask\\services\\user.py",
+    line: 15,
+    repo_id: "flask_main",
+    snapshot_id: "snap_001"
+  })
+
+NODE: Function
+--------------
+Properties:
+  - name (STRING): Function/method name
+  - file (STRING): File path containing the function
+  - line (INTEGER): Line number where function is defined
+  - repo_id (STRING): Repository identifier
+  - snapshot_id (STRING): Analysis snapshot identifier
+  - params (STRING): Function parameters (optional)
+
+Example:
+  (:Function {
+    name: "get_user",
+    file: "C:\\workspace\\flask\\services\\user.py",
+    line: 25,
+    repo_id: "flask_main",
+    snapshot_id: "snap_001",
+    params: "user_id: int"
+  })
+
+NODE: Module
+------------
+Properties:
+  - name (STRING, UNIQUE): Module name (e.g., "flask", "os", "json")
+
+Example:
+  (:Module {name: "flask"})
+
+NODE: Repository
+----------------
+Properties:
+  - id (STRING, UNIQUE): Repository identifier
+  - url (STRING): GitHub URL
+  - name (STRING): Repository name
+  - created_at (DATETIME): First analysis timestamp
+  - last_analyzed (DATETIME): Most recent analysis timestamp
+
+Example:
+  (:Repository {
+    id: "flask_main",
+    url: "https://github.com/pallets/flask",
+    name: "flask",
+    created_at: "2024-01-15T10:00:00",
+    last_analyzed: "2024-01-20T14:30:00"
+  })
+
+NODE: Snapshot
+--------------
+Properties:
+  - id (STRING, UNIQUE): Snapshot identifier
+  - repo_id (STRING): Parent repository ID
+  - timestamp (DATETIME): Analysis timestamp
+  - commit_hash (STRING): Git commit hash (if available)
+  - file_count (INTEGER): Number of files analyzed
+  - status (STRING): Analysis status (completed, failed)
+
+Example:
+  (:Snapshot {
+    id: "snap_001",
+    repo_id: "flask_main",
+    timestamp: "2024-01-15T10:30:00",
+    commit_hash: "a3f5b2c...",
+    file_count: 125,
+    status: "completed"
+  })
+
+--------------------------------------------------------------------------------
+2.2 RELATIONSHIP TYPES
+--------------------------------------------------------------------------------
+
+RELATIONSHIP: CONTAINS
+----------------------
+Direction: File -> Class, File -> Function
+Properties: None
+Meaning: File contains a class or function definition
+
+Example:
+  (:File {path: "app.py"})-[:CONTAINS]->(:Class {name: "App"})
+  (:File {path: "app.py"})-[:CONTAINS]->(:Function {name: "main"})
+
+RELATIONSHIP: IMPORTS
+---------------------
+Direction: File -> Module, File -> File
+Properties: None
+Meaning: File imports a module or another file
+
+Example:
+  (:File {path: "app.py"})-[:IMPORTS]->(:Module {name: "flask"})
+  (:File {path: "app.py"})-[:IMPORTS]->(:File {path: "config.py"})
+
+RELATIONSHIP: CALLS
+-------------------
+Direction: Function -> Function
+Properties: None
+Meaning: Function calls another function
+
+Example:
+  (:Function {name: "main"})-[:CALLS]->(:Function {name: "init_app"})
+
+RELATIONSHIP: INHERITS
+----------------------
+Direction: Class -> Class
+Properties: None
+Meaning: Class inherits from another class
+
+Example:
+  (:Class {name: "UserService"})-[:INHERITS]->(:Class {name: "BaseService"})
+
+RELATIONSHIP: DEPENDS_ON
+------------------------
+Direction: File -> File
+Properties:
+  - type (STRING): Dependency type (import, call, inheritance)
+Meaning: File depends on another file
+
+Example:
+  (:File {path: "app.py"})-[:DEPENDS_ON {type: "import"}]->(:File {path: "config.py"})
+
+RELATIONSHIP: HAS_SNAPSHOT
+--------------------------
+Direction: Repository -> Snapshot
+Properties: None
+Meaning: Repository has an analysis snapshot
+
+Example:
+  (:Repository {id: "flask_main"})-[:HAS_SNAPSHOT]->(:Snapshot {id: "snap_001"})
+
+RELATIONSHIP: BELONGS_TO
+------------------------
+Direction: File/Class/Function -> Snapshot
+Properties: None
+Meaning: Entity belongs to a specific snapshot
+
+Example:
+  (:File {path: "app.py"})-[:BELONGS_TO]->(:Snapshot {id: "snap_001"})
+
+--------------------------------------------------------------------------------
+2.3 GRAPH PATTERNS
+--------------------------------------------------------------------------------
+
+Pattern 1: File Dependencies
+-----------------------------
+MATCH (f1:File)-[:IMPORTS]->(f2:File)
+WHERE f1.repo_id = $repo_id
+RETURN f1.path, f2.path
+
+Pattern 2: Function Call Chain
+-------------------------------
+MATCH path = (f1:Function)-[:CALLS*1..5]->(f2:Function)
+WHERE f1.name = $start_function
+RETURN path
+
+Pattern 3: Circular Dependencies
+---------------------------------
+MATCH (f:File)-[:IMPORTS*2..10]->(f)
+WHERE f.repo_id = $repo_id
+RETURN f.path
+
+Pattern 4: High Fan-In Files
+-----------------------------
+MATCH (f:File)
+WHERE f.repo_id = $repo_id
+WITH f, size((f)<-[:IMPORTS]-()) as fan_in
+WHERE fan_in > 5
+RETURN f.path, fan_in
+ORDER BY fan_in DESC
+
+Pattern 5: Blast Radius
+------------------------
+MATCH (target:File {path: $file_path})
+MATCH (affected:File)-[:IMPORTS*1..3]->(target)
+WHERE affected.repo_id = target.repo_id
+RETURN DISTINCT affected.path
+
+================================================================================
+                    3. CHROMADB VECTOR DATABASE SCHEMA
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1 COLLECTION STRUCTURE
+--------------------------------------------------------------------------------
+
+Collection Name: code_embeddings
+
+Document Structure:
+{
+  "id": "unique_identifier",
+  "document": "code snippet or description",
+  "embedding": [0.123, -0.456, ...],  // 384-dimensional vector
+  "metadata": {
+    "file_path": "absolute/path/to/file.py",
+    "type": "class|function|file",
+    "name": "entity_name",
+    "language": "python|javascript|java",
+    "repo_id": "repository_identifier",
+    "snapshot_id": "snapshot_identifier",
+    "line": 25
+  }
+}
+
+--------------------------------------------------------------------------------
+3.2 DOCUMENT TYPES
+--------------------------------------------------------------------------------
+
+Type 1: Class Embedding
+------------------------
+{
+  "id": "/path/to/file.py:class:UserService",
+  "document": "class UserService handles user authentication and management",
+  "metadata": {
+    "file_path": "/path/to/file.py",
+    "type": "class",
+    "name": "UserService",
+    "language": "python",
+    "repo_id": "flask_main",
+    "snapshot_id": "snap_001",
+    "line": 15
+  }
+}
+
+Type 2: Function Embedding
+---------------------------
+{
+  "id": "/path/to/file.py:func:get_user",
+  "document": "function get_user retrieves user data from database",
+  "metadata": {
+    "file_path": "/path/to/file.py",
+    "type": "function",
+    "name": "get_user",
+    "language": "python",
+    "repo_id": "flask_main",
+    "snapshot_id": "snap_001",
+    "line": 25
+  }
+}
+
+Type 3: File Embedding
+-----------------------
+{
+  "id": "/path/to/file.py:file",
+  "document": "file contains user service implementation with authentication logic",
+  "metadata": {
+    "file_path": "/path/to/file.py",
+    "type": "file",
+    "name": "user.py",
+    "language": "python",
+    "repo_id": "flask_main",
+    "snapshot_id": "snap_001"
+  }
+}
+
+--------------------------------------------------------------------------------
+3.3 EMBEDDING MODEL
+--------------------------------------------------------------------------------
+
+Model: sentence-transformers/all-MiniLM-L6-v2
+Dimensions: 384
+Similarity Metric: Cosine Similarity
+Range: [-1, 1] (higher = more similar)
+
+================================================================================
+                    4. DATABASE RELATIONSHIPS
+================================================================================
+
+--------------------------------------------------------------------------------
+4.1 HYBRID RETRIEVAL STRATEGY
+--------------------------------------------------------------------------------
+
+Step 1: Semantic Search (ChromaDB)
+-----------------------------------
+Input: User query "How does authentication work?"
+Process: 
+  1. Embed query using sentence-transformers
+  2. Search ChromaDB for similar embeddings
+  3. Return top 10 results with similarity scores
+
+Output: [
+  {file: "auth.py", score: 0.85, type: "function"},
+  {file: "middleware.py", score: 0.78, type: "class"},
+  ...
+]
+
+Step 2: Structural Context (Neo4j)
+-----------------------------------
+Input: Context file "auth.py"
+Process:
+  1. Query dependencies: MATCH (f:File {path: "auth.py"})-[:IMPORTS]->(dep)
+  2. Query dependents: MATCH (f:File)-[:IMPORTS]->(target {path: "auth.py"})
+  3. Combine results
+
+Output: [
+  "middleware.py",
+  "routes.py",
+  "config.py"
+]
+
+Step 3: Hybrid Merge
+--------------------
+Process:
+  1. Boost scores for files in structural context (+0.5)
+  2. Merge and deduplicate results
+  3. Sort by final score
+  4. Return top 5 evidence chunks
+
+Output: [
+  {file: "auth.py", score: 1.35, evidence: "..."},
+  {file: "middleware.py", score: 1.28, evidence: "..."},
+  ...
+]
+
+--------------------------------------------------------------------------------
+4.2 DATA CONSISTENCY
+--------------------------------------------------------------------------------
+
+Consistency Rules:
+1. Every File node in Neo4j should have embeddings in ChromaDB
+2. Every Class/Function should reference an existing File
+3. Repository ID must be consistent across both databases
+4. Snapshot ID must match for all entities in same analysis
+
+Validation Queries:
+
+Check Orphaned Files:
+  MATCH (f:File)
+  WHERE NOT (f)-[:BELONGS_TO]->(:Snapshot)
+  RETURN f.path
+
+Check Missing Embeddings:
+  MATCH (f:File {repo_id: $repo_id})
+  // Check if corresponding embedding exists in ChromaDB
+  // (Requires application-level validation)
+
+================================================================================
+                    5. KEY QUERIES AND OPERATIONS
+================================================================================
+
+--------------------------------------------------------------------------------
+5.1 ANALYSIS QUERIES
+--------------------------------------------------------------------------------
+
+Query 1: Get All Files in Repository
+-------------------------------------
+MATCH (f:File {repo_id: $repo_id})
+RETURN f.path, f.language, f.content_hash
+ORDER BY f.path
+
+Query 2: Get File Dependencies
+-------------------------------
+MATCH (f:File {path: $file_path})-[:IMPORTS]->(dep)
+RETURN dep.path, dep.language
+
+Query 3: Get Files Affected by Change
+--------------------------------------
+MATCH (target:File {path: $file_path})
+MATCH (affected:File)-[:IMPORTS*1..3]->(target)
+WHERE affected.repo_id = target.repo_id
+RETURN DISTINCT affected.path, length(path) as distance
+ORDER BY distance
+
+Query 4: Detect Circular Dependencies
+--------------------------------------
+MATCH path = (f:File)-[:IMPORTS*2..10]->(f)
+WHERE f.repo_id = $repo_id
+RETURN [node in nodes(path) | node.path] as cycle
+
+Query 5: Calculate Coupling Metrics
+------------------------------------
+MATCH (f:File {repo_id: $repo_id})
+OPTIONAL MATCH (f)-[:IMPORTS]->(out)
+OPTIONAL MATCH (f)<-[:IMPORTS]-(in)
+RETURN f.path,
+       count(DISTINCT out) as fan_out,
+       count(DISTINCT in) as fan_in,
+       count(DISTINCT out) + count(DISTINCT in) as total_coupling
+ORDER BY total_coupling DESC
+
+--------------------------------------------------------------------------------
+5.2 PATTERN DETECTION QUERIES
+--------------------------------------------------------------------------------
+
+Query 6: Detect Layered Architecture
+-------------------------------------
+MATCH (f:File {repo_id: $repo_id})
+WITH f,
+     CASE
+       WHEN f.path CONTAINS 'presentation' OR f.path CONTAINS 'view' THEN 'presentation'
+       WHEN f.path CONTAINS 'business' OR f.path CONTAINS 'service' THEN 'business'
+       WHEN f.path CONTAINS 'data' OR f.path CONTAINS 'repository' THEN 'data'
+       ELSE 'unknown'
+     END as layer
+WHERE layer <> 'unknown'
+RETURN layer, count(f) as file_count
+
+Query 7: Detect MVC Pattern
+----------------------------
+MATCH (f:File {repo_id: $repo_id})
+WITH f,
+     CASE
+       WHEN f.path CONTAINS 'controller' THEN 'controller'
+       WHEN f.path CONTAINS 'model' THEN 'model'
+       WHEN f.path CONTAINS 'view' THEN 'view'
+       ELSE 'unknown'
+     END as component
+WHERE component <> 'unknown'
+RETURN component, count(f) as file_count
+
+Query 8: Detect Hexagonal Architecture
+---------------------------------------
+MATCH (f:File {repo_id: $repo_id})
+WITH f,
+     CASE
+       WHEN f.path CONTAINS 'port' THEN 'port'
+       WHEN f.path CONTAINS 'adapter' THEN 'adapter'
+       WHEN f.path CONTAINS 'domain' THEN 'domain'
+       ELSE 'unknown'
+     END as component
+WHERE component <> 'unknown'
+RETURN component, count(f) as file_count
+
+--------------------------------------------------------------------------------
+5.3 VERSION TRACKING QUERIES
+--------------------------------------------------------------------------------
+
+Query 9: Get Repository Snapshots
+----------------------------------
+MATCH (r:Repository {id: $repo_id})-[:HAS_SNAPSHOT]->(s:Snapshot)
+RETURN s.id, s.timestamp, s.commit_hash, s.file_count, s.status
+ORDER BY s.timestamp DESC
+
+Query 10: Compare Snapshots
+----------------------------
+MATCH (s1:Snapshot {id: $snapshot1})<-[:BELONGS_TO]-(f1:File)
+MATCH (s2:Snapshot {id: $snapshot2})<-[:BELONGS_TO]-(f2:File)
+WHERE f1.path = f2.path AND f1.content_hash <> f2.content_hash
+RETURN f1.path as file,
+       f1.content_hash as old_hash,
+       f2.content_hash as new_hash
+
+Query 11: Get File History
+---------------------------
+MATCH (f:File {path: $file_path})-[:BELONGS_TO]->(s:Snapshot)
+RETURN f.content_hash, s.timestamp, s.commit_hash
+ORDER BY s.timestamp DESC
+
+================================================================================
+                            6. DATA FLOW
+================================================================================
+
+--------------------------------------------------------------------------------
+6.1 INGESTION FLOW
+--------------------------------------------------------------------------------
+
+Step 1: Repository Clone
+  Input: GitHub URL
+  Process: GitPython clones repository to workspace/
+  Output: Local repository path
+
+Step 2: File Scanning
+  Input: Repository path
+  Process: Recursive directory traversal
+  Output: List of source files (.py, .js, .java)
+
+Step 3: AST Parsing
+  Input: Source file
+  Process: Tree-sitter parses file to AST
+  Output: {classes: [...], functions: [...], imports: [...]}
+
+Step 4: Graph Storage (Neo4j)
+  Input: Parsed data
+  Process:
+    - CREATE (:File {path: ..., language: ...})
+    - CREATE (:Class {name: ..., file: ..., line: ...})
+    - CREATE (:Function {name: ..., file: ..., line: ...})
+    - CREATE (:File)-[:CONTAINS]->(:Class)
+    - CREATE (:File)-[:IMPORTS]->(:Module)
+  Output: Graph nodes and relationships
+
+Step 5: Vector Storage (ChromaDB)
+  Input: Parsed data
+  Process:
+    - Extract code snippets
+    - Generate embeddings using sentence-transformers
+    - Store in ChromaDB with metadata
+  Output: Vector embeddings
+
+Step 6: Analysis
+  Input: Graph + Vectors
+  Process:
+    - Pattern detection
+    - Coupling analysis
+    - Dependency mapping
+  Output: Analysis results
+
+--------------------------------------------------------------------------------
+6.2 QUERY FLOW
+--------------------------------------------------------------------------------
+
+User Query: "How does authentication work?"
+
+Step 1: Semantic Search
+  ChromaDB.search("authentication", n=10)
+  -> Returns files with high semantic similarity
+
+Step 2: Structural Context
+  Neo4j: Get dependencies of top semantic results
+  -> Returns structurally related files
+
+Step 3: Hybrid Merge
+  Boost scores for structural matches
+  -> Returns top 5 evidence chunks
+
+Step 4: LLM Reasoning
+  Send evidence to LLM with prompt
+  -> Returns explanation with citations
+
+Step 5: Response
+  Return JSON with explanation and evidence files
+
+================================================================================
+                        7. INDEXING STRATEGY
+================================================================================
+
+--------------------------------------------------------------------------------
+7.1 NEO4J INDEXES
+--------------------------------------------------------------------------------
+
+Index 1: File Path
+  CREATE INDEX file_path_index FOR (f:File) ON (f.path)
+  Purpose: Fast file lookup by path
+
+Index 2: Repository ID
+  CREATE INDEX repo_id_index FOR (f:File) ON (f.repo_id)
+  Purpose: Filter files by repository
+
+Index 3: Snapshot ID
+  CREATE INDEX snapshot_id_index FOR (s:Snapshot) ON (s.id)
+  Purpose: Fast snapshot lookup
+
+Index 4: Content Hash
+  CREATE INDEX content_hash_index FOR (f:File) ON (f.content_hash)
+  Purpose: Detect file changes
+
+Index 5: Function Name
+  CREATE INDEX function_name_index FOR (fn:Function) ON (fn.name)
+  Purpose: Fast function lookup
+
+--------------------------------------------------------------------------------
+7.2 CHROMADB INDEXES
+--------------------------------------------------------------------------------
+
+ChromaDB automatically creates HNSW (Hierarchical Navigable Small World) index
+for fast approximate nearest neighbor search.
+
+Configuration:
+  - Distance metric: Cosine similarity
+  - Index type: HNSW
+  - M parameter: 16 (connections per layer)
+  - ef_construction: 200 (search depth during construction)
+
+================================================================================
+                        8. BACKUP AND RECOVERY
+================================================================================
+
+--------------------------------------------------------------------------------
+8.1 NEO4J BACKUP
+--------------------------------------------------------------------------------
+
+Method 1: Database Dump
+  neo4j-admin dump --database=neo4j --to=/backup/neo4j.dump
+
+Method 2: Cypher Export
+  CALL apoc.export.cypher.all("/backup/export.cypher", {})
+
+Restore:
+  neo4j-admin load --from=/backup/neo4j.dump --database=neo4j --force
+
+--------------------------------------------------------------------------------
+8.2 CHROMADB BACKUP
+--------------------------------------------------------------------------------
+
+Method: File System Copy
+  Copy entire chroma_db/ directory to backup location
+
+Restore:
+  Copy backup directory back to chroma_db/
+
+--------------------------------------------------------------------------------
+8.3 DISASTER RECOVERY
+--------------------------------------------------------------------------------
+
+Scenario 1: Database Corruption
+  1. Stop services
+  2. Restore from latest backup
+  3. Re-run analysis for recent repositories
+
+Scenario 2: Data Loss
+  1. Repository data is recoverable from GitHub
+  2. Re-clone and re-analyze affected repositories
+  3. Snapshots are regenerated with new timestamps
+
+================================================================================
+                            END OF DOCUMENT
+================================================================================

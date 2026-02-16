@@ -1,15 +1,21 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
+import { formatFilePath, formatEvidenceText } from '../utils/formatters';
 
-export default function ArchitectureView() {
+export default function ArchitectureView({ repoId }) {
   const [architecture, setArchitecture] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [cached, setCached] = useState(false);
 
   const loadArchitecture = async () => {
     setLoading(true);
+    setCached(false);
     try {
-      const { data } = await api.getArchitecture();
+      const { data } = await api.getArchitecture(repoId);
       setArchitecture(data);
+      if (data.cached) {
+        setCached(true);
+      }
     } catch (error) {
       console.error(error);
       setArchitecture({ error: 'Failed to load architecture explanation' });
@@ -19,10 +25,13 @@ export default function ArchitectureView() {
 
   useEffect(() => {
     loadArchitecture();
-  }, []);
+  }, [repoId]);
 
   const formatText = (text) => {
     if (!text) return null;
+    
+    // Format file paths in text
+    text = formatEvidenceText(text);
     
     return text
       .split('\n')
@@ -51,7 +60,13 @@ export default function ArchitectureView() {
 
   return (
     <div style={styles.container}>
-      <h2>Architecture Explanation</h2>
+      <div style={styles.headerBar}>
+        <h2>Architecture Explanation</h2>
+        {cached && <span style={styles.cacheBadge}>Cached</span>}
+        <button onClick={loadArchitecture} style={styles.refreshBtn} disabled={loading}>
+          {loading ? 'Loading...' : 'Refresh'}
+        </button>
+      </div>
       
       {architecture.macro && (
         <div style={styles.section}>
@@ -79,8 +94,10 @@ export default function ArchitectureView() {
           <h3>Evidence</h3>
           {architecture.evidence.map((item, idx) => (
             <div key={idx} style={styles.evidence}>
-              <strong>{item.file || item.source}</strong>
-              <p>{item.reason || item.content}</p>
+              <strong title={item.file || item.source}>
+                {formatFilePath(item.file || item.source, 2)}
+              </strong>
+              <p>{formatEvidenceText(item.reason || item.content)}</p>
             </div>
           ))}
         </div>
@@ -91,6 +108,9 @@ export default function ArchitectureView() {
 
 const styles = {
   container: { padding: '20px', background: '#fff', borderRadius: '8px', marginBottom: '20px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' },
+  headerBar: { display: 'flex', alignItems: 'center', gap: '15px', marginBottom: '20px' },
+  cacheBadge: { padding: '4px 12px', background: '#d1fae5', color: '#065f46', borderRadius: '12px', fontSize: '12px', fontWeight: 'bold' },
+  refreshBtn: { padding: '6px 12px', background: '#667eea', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '13px' },
   section: { marginBottom: '25px', padding: '15px', background: '#f9f9f9', borderRadius: '6px' },
   text: { lineHeight: '1.8', color: '#333' },
   h3: { fontSize: '18px', fontWeight: 'bold', marginTop: '12px', marginBottom: '8px', color: '#444' },

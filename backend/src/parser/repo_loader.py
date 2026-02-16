@@ -12,7 +12,13 @@ class RepositoryLoader:
         self.workspace_dir.mkdir(exist_ok=True)
         
     def clone_repository(self, repo_url: str) -> Path:
+        if not repo_url:
+            raise ValueError("Repository URL cannot be empty")
+        
         repo_name = repo_url.rstrip('/').split('/')[-1].replace('.git', '')
+        if not repo_name:
+            raise ValueError(f"Could not extract repository name from URL: {repo_url}")
+        
         target_path = self.workspace_dir / repo_name
         
         logger.info(f"🔄 Starting repository clone: {repo_url}")

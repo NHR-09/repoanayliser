@@ -27,7 +27,8 @@ class StaticParser:
             'classes': self._extract_classes(tree.root_node, code),
             'functions': self._extract_functions(tree.root_node, code),
             'imports': self._extract_imports(tree.root_node, code, language),
-            'function_calls': self._extract_function_calls(tree.root_node, code, language)
+            'function_calls': self._extract_function_calls(tree.root_node, code, language),
+            'function_to_function_calls': self._extract_function_to_function_calls(tree.root_node, code, language)
         }
     
     def _extract_classes(self, node, code) -> List[Dict]:
@@ -98,3 +99,25 @@ class StaticParser:
         if not node:
             return ""
         return code[node.start_byte:node.end_byte].decode('utf8')
+    
+    def _extract_function_to_function_calls(self, node, code, language) -> List[Dict]:
+        """Extract which functions call which other functions"""
+        result = []
+        
+        if language == 'python':
+            if node.type == 'function_definition':
+                func_name = self._get_node_text(node.child_by_field_name('name'), code)
+                calls = self._extract_function_calls(node, code, language)
+                for called in set(calls):
+                    result.append({'caller': func_name, 'callee': called})
+        elif language == 'javascript':
+            if node.type == 'function_declaration':
+                func_name = self._get_node_text(node.child_by_field_name('name'), code)
+                calls = self._extract_function_calls(node, code, language)
+                for called in set(calls):
+                    result.append({'caller': func_name, 'callee': called})
+        
+        for child in node.children:
+            result.extend(self._extract_function_to_function_calls(child, code, language))
+        
+        return result

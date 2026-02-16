@@ -10,9 +10,11 @@ export default function AnalyzeRepo({ onAnalysisComplete }) {
   const handleAnalyze = async () => {
     if (!repoUrl) return;
     setLoading(true);
+    setStatus('Starting analysis...');
     try {
       const { data } = await api.analyzeRepo(repoUrl);
       setJobId(data.job_id);
+      setStatus('Cloning repository and importing git history...');
       pollStatus(data.job_id);
     } catch (error) {
       setStatus('Error: ' + error.message);
@@ -28,7 +30,7 @@ export default function AnalyzeRepo({ onAnalysisComplete }) {
         if (data.status === 'completed') {
           clearInterval(interval);
           setLoading(false);
-          onAnalysisComplete();
+          onAnalysisComplete(data.result);
         } else if (data.status === 'failed') {
           clearInterval(interval);
           setLoading(false);
@@ -44,9 +46,12 @@ export default function AnalyzeRepo({ onAnalysisComplete }) {
   return (
     <div style={styles.container}>
       <h2>Analyze Repository</h2>
+      <p style={styles.description}>
+        Analyzes repository structure, imports git commit history, and tracks file versions.
+      </p>
       <input
         type="text"
-        placeholder="Enter GitHub repository URL"
+        placeholder="Enter GitHub repository URL (e.g., https://github.com/user/repo)"
         value={repoUrl}
         onChange={(e) => setRepoUrl(e.target.value)}
         style={styles.input}
@@ -54,14 +59,22 @@ export default function AnalyzeRepo({ onAnalysisComplete }) {
       <button onClick={handleAnalyze} disabled={loading} style={styles.button}>
         {loading ? 'Analyzing...' : 'Analyze'}
       </button>
-      {jobId && <p>Job ID: {jobId}</p>}
-      {status && <p>Status: {status}</p>}
+      {jobId && <p style={styles.jobId}>Job ID: <code>{jobId}</code></p>}
+      {status && (
+        <div style={status.includes('Error') || status.includes('Failed') ? styles.errorStatus : styles.status}>
+          {status}
+        </div>
+      )}
     </div>
   );
 }
 
 const styles = {
-  container: { padding: '20px', background: '#f5f5f5', borderRadius: '8px', marginBottom: '20px' },
-  input: { width: '100%', padding: '10px', marginBottom: '10px', fontSize: '14px', borderRadius: '4px', border: '1px solid #ddd' },
-  button: { padding: '10px 20px', background: '#007bff', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer' }
+  container: { padding: '20px', background: 'white', borderRadius: '8px', marginBottom: '20px', boxShadow: '0 2px 8px rgba(0,0,0,0.1)' },
+  description: { color: '#666', fontSize: '14px', marginBottom: '15px' },
+  input: { width: '100%', padding: '12px', marginBottom: '10px', fontSize: '14px', borderRadius: '6px', border: '1px solid #ddd', boxSizing: 'border-box' },
+  button: { padding: '12px 24px', background: '#667eea', color: 'white', border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '14px', fontWeight: 'bold' },
+  jobId: { marginTop: '15px', padding: '10px', background: '#f9fafb', borderRadius: '4px', fontSize: '13px' },
+  status: { marginTop: '10px', padding: '12px', background: '#dbeafe', color: '#1e40af', borderRadius: '6px', fontSize: '14px' },
+  errorStatus: { marginTop: '10px', padding: '12px', background: '#fee2e2', color: '#991b1b', borderRadius: '6px', fontSize: '14px' }
 };

@@ -2,19 +2,17 @@ import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
 import Highlighter from './Highlighter';
 
-export default function PatternDetection() {
+export default function PatternDetection({ repoId }) {
   const [patterns, setPatterns] = useState(null);
   const [loading, setLoading] = useState(false);
   const [terminalLines, setTerminalLines] = useState([]);
 
   const loadPatterns = async () => {
-    if (loading || patterns) return; // Prevent duplicate calls
-    
     setLoading(true);
     setTerminalLines([]);
     
     try {
-      const { data } = await api.getPatterns();
+      const { data } = await api.getPatterns(repoId);
       setPatterns(data);
       
       const lines = [];
@@ -53,14 +51,19 @@ export default function PatternDetection() {
 
   useEffect(() => {
     loadPatterns();
-  }, []);
+  }, [repoId]);
 
   if (loading) return <div style={styles.container}>Loading patterns...</div>;
   if (!patterns) return <div style={styles.container}>No patterns detected yet</div>;
 
   return (
     <div style={styles.container}>
-      <h2>Detected Patterns</h2>
+      <div style={styles.headerBar}>
+        <h2>Detected Patterns</h2>
+        <button onClick={loadPatterns} style={styles.refreshBtn} disabled={loading}>
+          {loading ? 'Refreshing...' : 'Refresh'}
+        </button>
+      </div>
       
       {/* Terminal Window */}
       <div style={styles.terminal}>
@@ -100,6 +103,8 @@ export default function PatternDetection() {
 
 const styles = {
   container: { padding: '20px', background: '#fff', borderRadius: '8px', marginBottom: '20px', boxShadow: '0 2px 4px rgba(0,0,0,0.1)' },
+  headerBar: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' },
+  refreshBtn: { padding: '6px 12px', background: '#667eea', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '13px' },
   terminal: { marginBottom: '30px', borderRadius: '8px', overflow: 'hidden', boxShadow: '0 4px 12px rgba(0,0,0,0.15)' },
   terminalHeader: { background: '#e8e8e8', padding: '10px 15px', display: 'flex', alignItems: 'center', gap: '10px' },
   terminalButtons: { display: 'flex', gap: '8px' },

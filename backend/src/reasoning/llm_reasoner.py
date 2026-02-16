@@ -56,7 +56,8 @@ Be specific and cite the graph structure."""
     
     def explain_micro_level(self, files: List[str], graph_data: Dict) -> str:
         """Generate micro-level explanation with file details"""
-        file_summary = '\n'.join([f"- {f.split('/')[-1]}" for f in files[:15]])
+        # Filter out None values and extract filenames
+        file_summary = '\n'.join([f"- {(f or 'unknown').split('/')[-1]}" for f in files[:15] if f])
         
         prompt = f"""Analyze the file-level architecture details.
 
@@ -122,7 +123,7 @@ Explain what consequences this change may have. Cite specific files."""
     def _build_function_prompt(self, function_name: str, function_info: Dict, callers: List[Dict], context: List[Dict], function_code: str = None) -> str:
         """Build prompt for function explanation"""
         caller_text = "\n".join([
-            f"- {c['caller_name']} in {c['caller_file']}"
+            f"- {c.get('file', 'unknown')}"
             for c in callers
         ]) if callers else "No direct callers found"
         

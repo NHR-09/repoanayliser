@@ -1,0 +1,744 @@
+================================================================================
+                    ARCHITECH - CODEBASE ARCHITECTURE
+================================================================================
+
+PROJECT: ARCHITECH - Architectural Recovery & Semantic Synthesis Platform
+DOCUMENT: Codebase Structure and Module Architecture
+VERSION: 1.0
+DATE: 2024
+
+================================================================================
+                        TABLE OF CONTENTS
+================================================================================
+
+1. PROJECT STRUCTURE
+2. BACKEND ARCHITECTURE
+3. FRONTEND ARCHITECTURE
+4. MODULE DESCRIPTIONS
+5. KEY CLASSES AND METHODS
+6. DATA MODELS
+7. CONFIGURATION
+
+================================================================================
+                    1. PROJECT STRUCTURE
+================================================================================
+
+ARCHITECH/
+|
++-- backend/                    # Python FastAPI backend
+|   |
+|   +-- src/                    # Source code
+|   |   |
+|   |   +-- api/                # API routes
+|   |   |   +-- commit_routes.py
+|   |   |
+|   |   +-- graph/              # Graph database operations
+|   |   |   +-- graph_db.py
+|   |   |   +-- dependency_mapper.py
+|   |   |   +-- analyzers.py
+|   |   |   +-- blast_radius.py
+|   |   |   +-- function_graph.py
+|   |   |   +-- version_tracker.py
+|   |   |
+|   |   +-- parser/             # Code parsing
+|   |   |   +-- repo_loader.py
+|   |   |   +-- static_parser.py
+|   |   |
+|   |   +-- reasoning/          # LLM integration
+|   |   |   +-- llm_reasoner.py
+|   |   |
+|   |   +-- retrieval/          # Hybrid retrieval
+|   |   |   +-- retrieval_engine.py
+|   |   |   +-- vector_store.py
+|   |   |
+|   |   +-- analysis_engine.py  # Main analysis orchestrator
+|   |   +-- config.py           # Configuration
+|   |
+|   +-- workspace/              # Cloned repositories
+|   +-- chroma_db/              # ChromaDB storage
+|   +-- main.py                 # FastAPI application
+|   +-- requirements.txt        # Python dependencies
+|   +-- .env                    # Environment variables
+|
++-- frontend/                   # React frontend
+|   |
+|   +-- src/
+|   |   +-- components/         # React components
+|   |   |   +-- AnalyzeRepo.js
+|   |   |   +-- PatternDetection.js
+|   |   |   +-- CouplingAnalysis.js
+|   |   |   +-- ImpactAnalysis.js
+|   |   |   +-- ArchitectureView.js
+|   |   |   +-- DependencyGraph.js
+|   |   |
+|   |   +-- services/           # API services
+|   |   |   +-- api.js
+|   |   |
+|   |   +-- App.js              # Main application
+|   |   +-- index.js            # Entry point
+|   |
+|   +-- public/
+|   +-- package.json            # Node dependencies
+|
++-- docs/                       # Documentation
++-- README.md                   # Project overview
+
+================================================================================
+                    2. BACKEND ARCHITECTURE
+================================================================================
+
+--------------------------------------------------------------------------------
+2.1 MAIN APPLICATION (main.py)
+--------------------------------------------------------------------------------
+
+PURPOSE: FastAPI application entry point
+
+KEY COMPONENTS:
+  - FastAPI app initialization
+  - CORS middleware configuration
+  - API route definitions
+  - Background job management
+  - Error handling
+
+ROUTES:
+  POST   /analyze                 # Start repository analysis
+  GET    /status/{job_id}         # Check analysis status
+  GET    /patterns                # Get detected patterns
+  GET    /coupling                # Get coupling metrics
+  POST   /impact                  # Analyze change impact
+  GET    /architecture            # Get AI explanation
+  GET    /blast-radius/{path}     # Get blast radius
+  GET    /dependencies/{path}     # Get dependencies
+  GET    /graph/data              # Get file graph
+  GET    /graph/functions         # Get function graph
+  GET    /repositories            # List repositories
+  GET    /repository/{id}/snapshots  # List snapshots
+
+GLOBAL STATE:
+  - jobs: Dict[job_id, status]
+  - engine: AnalysisEngine instance
+
+--------------------------------------------------------------------------------
+2.2 ANALYSIS ENGINE (analysis_engine.py)
+--------------------------------------------------------------------------------
+
+PURPOSE: Orchestrates entire analysis pipeline
+
+CLASS: AnalysisEngine
+
+ATTRIBUTES:
+  - graph_db: GraphDatabase instance
+  - vector_store: VectorStore instance
+  - retrieval_engine: RetrievalEngine instance
+  - llm_reasoner: LLMReasoner instance
+  - repo_loader: RepositoryLoader instance
+  - parser: StaticParser instance
+
+METHODS:
+  analyze_repository(repo_url: str) -> Dict
+    - Clones repository
+    - Parses all files
+    - Stores in databases
+    - Returns analysis results
+  
+  get_patterns() -> Dict
+    - Detects architectural patterns
+    - Returns confidence scores
+  
+  get_coupling() -> Dict
+    - Calculates coupling metrics
+    - Detects circular dependencies
+  
+  analyze_impact(file_path: str) -> Dict
+    - Calculates blast radius
+    - Generates impact explanation
+  
+  get_architecture_explanation(query: str) -> Dict
+    - Retrieves evidence
+    - Generates multi-level explanation
+
+WORKFLOW:
+  1. Clone repository
+  2. Scan files
+  3. Parse each file (AST)
+  4. Store in Neo4j (graph)
+  5. Store in ChromaDB (vectors)
+  6. Run analysis (patterns, coupling)
+  7. Return results
+
+--------------------------------------------------------------------------------
+2.3 PARSER MODULE
+--------------------------------------------------------------------------------
+
+FILE: repo_loader.py
+CLASS: RepositoryLoader
+
+METHODS:
+  clone_repo(url: str) -> str
+    - Clones GitHub repository
+    - Returns local path
+  
+  scan_files(path: str) -> List[str]
+    - Recursively scans directory
+    - Filters by extension (.py, .js, .java)
+    - Returns list of file paths
+
+FILE: static_parser.py
+CLASS: StaticParser
+
+METHODS:
+  parse_file(file_path: str) -> Dict
+    - Reads file content
+    - Parses with Tree-sitter
+    - Extracts classes, functions, imports
+    - Returns structured data
+  
+  extract_classes(ast: Node) -> List[Dict]
+    - Traverses AST for class definitions
+    - Extracts name, line number
+  
+  extract_functions(ast: Node) -> List[Dict]
+    - Traverses AST for function definitions
+    - Extracts name, line number, parameters
+  
+  extract_imports(ast: Node) -> List[str]
+    - Traverses AST for import statements
+    - Extracts module names
+
+SUPPORTED LANGUAGES:
+  - Python (tree-sitter-python)
+  - JavaScript (tree-sitter-javascript)
+  - Java (planned)
+
+--------------------------------------------------------------------------------
+2.4 GRAPH MODULE
+--------------------------------------------------------------------------------
+
+FILE: graph_db.py
+CLASS: GraphDatabase
+
+METHODS:
+  store_file(file_data: Dict) -> None
+    - Creates File node
+    - Creates Class/Function nodes
+    - Creates relationships
+  
+  get_dependencies(file_path: str) -> List[str]
+    - Queries IMPORTS relationships
+    - Returns list of dependencies
+  
+  get_affected_files(file_path: str) -> List[str]
+    - Queries reverse IMPORTS
+    - Returns files that depend on target
+  
+  detect_cycles() -> List[List[str]]
+    - Finds circular dependencies
+    - Returns list of cycles
+
+FILE: dependency_mapper.py
+CLASS: DependencyMapper
+
+METHODS:
+  build_dependency_graph() -> nx.Graph
+    - Queries Neo4j for all files
+    - Builds NetworkX graph
+    - Returns graph object
+  
+  calculate_coupling() -> Dict
+    - Calculates fan-in/fan-out
+    - Identifies high coupling
+    - Returns metrics
+
+FILE: analyzers.py
+CLASS: PatternDetector
+
+METHODS:
+  detect_patterns() -> Dict
+    - Detects Layered architecture
+    - Detects MVC pattern
+    - Detects Hexagonal architecture
+    - Returns confidence scores
+
+CLASS: CouplingAnalyzer
+
+METHODS:
+  analyze_coupling() -> Dict
+    - Calculates coupling metrics
+    - Identifies problematic files
+    - Returns analysis results
+
+FILE: blast_radius.py
+CLASS: BlastRadiusAnalyzer
+
+METHODS:
+  get_blast_radius(file_path: str) -> List[str]
+    - Queries Neo4j for affected files
+    - Uses BFS/DFS traversal
+    - Returns list of impacted files
+  
+  calculate_risk_level(size: int) -> str
+    - Classifies risk (high/medium/low)
+    - Based on blast radius size
+
+FILE: function_graph.py
+CLASS: FunctionGraphBuilder
+
+METHODS:
+  build_function_graph() -> Dict
+    - Queries Neo4j for functions
+    - Builds function call graph
+    - Returns nodes and edges
+
+FILE: version_tracker.py
+CLASS: VersionTracker
+
+METHODS:
+  create_snapshot(repo_id: str) -> str
+    - Creates analysis snapshot
+    - Stores metadata
+    - Returns snapshot_id
+  
+  compare_snapshots(s1: str, s2: str) -> Dict
+    - Compares two snapshots
+    - Identifies changes
+    - Returns diff
+
+--------------------------------------------------------------------------------
+2.5 RETRIEVAL MODULE
+--------------------------------------------------------------------------------
+
+FILE: vector_store.py
+CLASS: VectorStore
+
+METHODS:
+  add_code_chunk(chunk_id: str, code: str, metadata: Dict) -> None
+    - Generates embedding
+    - Stores in ChromaDB
+  
+  search(query: str, n_results: int) -> List[Dict]
+    - Embeds query
+    - Searches ChromaDB
+    - Returns similar code chunks
+
+FILE: retrieval_engine.py
+CLASS: RetrievalEngine
+
+METHODS:
+  retrieve_evidence(query: str, context_file: str) -> List[Dict]
+    - Semantic search (ChromaDB)
+    - Structural context (Neo4j)
+    - Hybrid merge
+    - Returns top evidence chunks
+  
+  hybrid_retrieval(query: str, context: str) -> List[Dict]
+    - Combines semantic + structural
+    - Boosts structural matches
+    - Returns ranked results
+
+--------------------------------------------------------------------------------
+2.6 REASONING MODULE
+--------------------------------------------------------------------------------
+
+FILE: llm_reasoner.py
+CLASS: LLMReasoner
+
+METHODS:
+  explain_architecture(query: str, evidence: List[Dict]) -> Dict
+    - Constructs prompt with evidence
+    - Calls Groq API
+    - Parses response
+    - Returns explanation with citations
+  
+  generate_macro_explanation(evidence: List[Dict]) -> str
+    - System-level explanation
+  
+  generate_meso_explanation(evidence: List[Dict]) -> str
+    - Module-level explanation
+  
+  generate_micro_explanation(evidence: List[Dict]) -> str
+    - File/function-level explanation
+
+PROMPT TEMPLATE:
+  """
+  You are analyzing a software repository using only supplied evidence.
+  
+  Rules:
+  - Do not assume undocumented behavior
+  - Cite files for every claim
+  - Infer only from dependencies shown
+  
+  Evidence:
+  {evidence}
+  
+  Question: {query}
+  """
+
+================================================================================
+                    3. FRONTEND ARCHITECTURE
+================================================================================
+
+--------------------------------------------------------------------------------
+3.1 MAIN APPLICATION (App.js)
+--------------------------------------------------------------------------------
+
+PURPOSE: Main React component and routing
+
+STATE:
+  - activeTab: Current tab selection
+  - refreshKey: Force component refresh
+
+METHODS:
+  handleAnalysisComplete()
+    - Called when analysis finishes
+    - Switches to Patterns tab
+    - Refreshes components
+
+TABS:
+  1. Analyze Repository
+  2. Pattern Detection
+  3. Coupling Analysis
+  4. Impact Analysis
+  5. Architecture View
+  6. Dependency Graph
+
+--------------------------------------------------------------------------------
+3.2 COMPONENTS
+--------------------------------------------------------------------------------
+
+COMPONENT: AnalyzeRepo.js
+
+PURPOSE: Repository input and analysis trigger
+
+STATE:
+  - repoUrl: GitHub URL input
+  - status: Analysis status
+  - jobId: Background job ID
+
+METHODS:
+  handleAnalyze()
+    - Calls POST /analyze
+    - Starts polling status
+    - Updates UI with progress
+  
+  pollStatus()
+    - Calls GET /status/{jobId}
+    - Updates status every 2 seconds
+    - Stops when completed
+
+COMPONENT: PatternDetection.js
+
+PURPOSE: Display detected architectural patterns
+
+STATE:
+  - patterns: Pattern detection results
+
+METHODS:
+  fetchPatterns()
+    - Calls GET /patterns
+    - Updates state with results
+  
+  renderPattern(pattern)
+    - Renders pattern card
+    - Shows confidence score
+    - Displays evidence
+
+COMPONENT: CouplingAnalysis.js
+
+PURPOSE: Display coupling metrics
+
+STATE:
+  - coupling: Coupling analysis results
+
+METHODS:
+  fetchCoupling()
+    - Calls GET /coupling
+    - Updates state with metrics
+  
+  renderMetrics()
+    - Displays fan-in/fan-out
+    - Shows high coupling files
+    - Lists circular dependencies
+
+COMPONENT: ImpactAnalysis.js
+
+PURPOSE: Change impact prediction
+
+STATE:
+  - filePath: Target file input
+  - impact: Impact analysis results
+
+METHODS:
+  handleAnalyze()
+    - Calls POST /impact
+    - Updates state with results
+  
+  renderBlastRadius()
+    - Lists affected files
+    - Shows risk level
+    - Displays AI explanation
+
+COMPONENT: ArchitectureView.js
+
+PURPOSE: Multi-level architecture explanations
+
+STATE:
+  - query: User query input
+  - explanation: AI-generated explanation
+
+METHODS:
+  handleQuery()
+    - Calls GET /architecture
+    - Updates state with explanation
+  
+  renderExplanation()
+    - Shows macro explanation
+    - Shows meso explanation
+    - Shows micro explanation
+    - Lists evidence files
+
+COMPONENT: DependencyGraph.js
+
+PURPOSE: Interactive graph visualization
+
+STATE:
+  - graphData: Nodes and edges
+  - selectedNode: Currently selected node
+
+METHODS:
+  fetchGraphData()
+    - Calls GET /graph/data
+    - Updates state with graph
+  
+  renderGraph()
+    - Uses D3.js force simulation
+    - Renders nodes and edges
+    - Handles drag interactions
+
+--------------------------------------------------------------------------------
+3.3 SERVICES (api.js)
+--------------------------------------------------------------------------------
+
+PURPOSE: Axios HTTP client for API calls
+
+METHODS:
+  analyzeRepo(repoUrl)
+    - POST /analyze
+    - Returns job_id
+  
+  getStatus(jobId)
+    - GET /status/{jobId}
+    - Returns status
+  
+  getPatterns()
+    - GET /patterns
+    - Returns pattern data
+  
+  getCoupling()
+    - GET /coupling
+    - Returns coupling data
+  
+  analyzeImpact(filePath)
+    - POST /impact
+    - Returns impact data
+  
+  getArchitecture(query)
+    - GET /architecture
+    - Returns explanation
+  
+  getGraphData()
+    - GET /graph/data
+    - Returns graph data
+
+================================================================================
+                    4. MODULE DESCRIPTIONS
+================================================================================
+
+MODULE: Parser
+  Purpose: Extract structure from source code
+  Technology: Tree-sitter
+  Input: Source file path
+  Output: {classes, functions, imports}
+
+MODULE: Graph
+  Purpose: Store and query code relationships
+  Technology: Neo4j
+  Input: Parsed data
+  Output: Graph database
+
+MODULE: Retrieval
+  Purpose: Find relevant code for queries
+  Technology: ChromaDB + Neo4j
+  Input: User query
+  Output: Evidence chunks
+
+MODULE: Reasoning
+  Purpose: Generate explanations
+  Technology: Groq LLM
+  Input: Query + Evidence
+  Output: Multi-level explanation
+
+MODULE: Analysis
+  Purpose: Detect patterns and metrics
+  Technology: NetworkX + Custom algorithms
+  Input: Graph data
+  Output: Patterns, coupling, impact
+
+================================================================================
+                    5. KEY CLASSES AND METHODS
+================================================================================
+
+CLASS: AnalysisEngine
+  Location: backend/src/analysis_engine.py
+  Purpose: Main orchestrator
+  Key Methods:
+    - analyze_repository()
+    - get_patterns()
+    - get_coupling()
+    - analyze_impact()
+
+CLASS: StaticParser
+  Location: backend/src/parser/static_parser.py
+  Purpose: AST parsing
+  Key Methods:
+    - parse_file()
+    - extract_classes()
+    - extract_functions()
+    - extract_imports()
+
+CLASS: GraphDatabase
+  Location: backend/src/graph/graph_db.py
+  Purpose: Neo4j operations
+  Key Methods:
+    - store_file()
+    - get_dependencies()
+    - get_affected_files()
+    - detect_cycles()
+
+CLASS: PatternDetector
+  Location: backend/src/graph/analyzers.py
+  Purpose: Pattern detection
+  Key Methods:
+    - detect_patterns()
+    - _detect_layered()
+    - _detect_mvc()
+    - _detect_hexagonal()
+
+CLASS: BlastRadiusAnalyzer
+  Location: backend/src/graph/blast_radius.py
+  Purpose: Impact analysis
+  Key Methods:
+    - get_blast_radius()
+    - calculate_risk_level()
+
+CLASS: RetrievalEngine
+  Location: backend/src/retrieval/retrieval_engine.py
+  Purpose: Hybrid retrieval
+  Key Methods:
+    - retrieve_evidence()
+    - hybrid_retrieval()
+
+CLASS: LLMReasoner
+  Location: backend/src/reasoning/llm_reasoner.py
+  Purpose: LLM integration
+  Key Methods:
+    - explain_architecture()
+    - generate_macro_explanation()
+    - generate_meso_explanation()
+    - generate_micro_explanation()
+
+================================================================================
+                    6. DATA MODELS
+================================================================================
+
+MODEL: ParsedFile
+{
+  "file": "path/to/file.py",
+  "language": "python",
+  "classes": [
+    {"name": "ClassName", "line": 10}
+  ],
+  "functions": [
+    {"name": "function_name", "line": 25, "params": "arg1, arg2"}
+  ],
+  "imports": ["module1", "module2"]
+}
+
+MODEL: PatternResult
+{
+  "layered": {
+    "detected": true,
+    "confidence": 0.8,
+    "layers": ["presentation", "business", "data"],
+    "evidence": ["file1.py", "file2.py"]
+  },
+  "mvc": {
+    "detected": true,
+    "confidence": 0.9,
+    "controllers": 12,
+    "models": 8,
+    "views": 5
+  }
+}
+
+MODEL: CouplingResult
+{
+  "high_coupling": [
+    {"file": "service.py", "fan_in": 8, "fan_out": 12}
+  ],
+  "cycles": [
+    ["a.py", "b.py", "a.py"]
+  ],
+  "metrics": {
+    "total_files": 50,
+    "avg_coupling": 2.4
+  }
+}
+
+MODEL: ImpactResult
+{
+  "file": "auth.py",
+  "blast_radius": ["login.py", "middleware.py"],
+  "risk_level": "high",
+  "impact_explanation": "Changing auth.py affects..."
+}
+
+MODEL: ArchitectureExplanation
+{
+  "explanation": "Overall explanation...",
+  "evidence_files": ["file1.py", "file2.py"],
+  "macro": "System-level explanation...",
+  "meso": "Module-level explanation...",
+  "micro": "File-level explanation..."
+}
+
+================================================================================
+                    7. CONFIGURATION
+================================================================================
+
+FILE: backend/.env
+
+VARIABLES:
+  NEO4J_URI=bolt://localhost:7687
+  NEO4J_USER=neo4j
+  NEO4J_PASSWORD=password
+  GROQ_API_KEY=your_api_key_here
+  WORKSPACE_DIR=./workspace
+  CHROMA_DB_DIR=./chroma_db
+
+FILE: backend/src/config.py
+
+SETTINGS:
+  - Database connection strings
+  - API keys
+  - File paths
+  - Logging configuration
+
+FILE: frontend/src/services/api.js
+
+CONFIGURATION:
+  BASE_URL = "http://localhost:8000"
+  TIMEOUT = 30000 (30 seconds)
+
+================================================================================
+                            END OF DOCUMENT
+================================================================================

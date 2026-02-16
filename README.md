@@ -24,9 +24,14 @@ Developers spend **more time understanding codebases than writing code**. Modern
 - Fan-in/fan-out metrics
 - Coupling analysis
 - Strongly connected components
+- **File-level dependency graphs**
+- **Function-level call graphs** ✨ NEW
 
 ### 3. Change Impact Analysis (Blast Radius)
 - Predicts affected files when modifying code
+- **Change simulation types: DELETE, MODIFY, MOVE** ✨ NEW
+- **Separate direct vs indirect dependencies** ✨ NEW
+- **Function-level impact tracking** ✨ NEW
 - Risk level classification (high/medium/low)
 - Graph-based propagation analysis
 
@@ -39,6 +44,17 @@ Developers spend **more time understanding codebases than writing code**. Modern
 - Every claim cites source files
 - Hybrid retrieval (semantic + structural)
 - No LLM hallucinations
+
+### 6. Repository Version Tracking
+- SHA-256 content hashing
+- Multi-repository management
+- Snapshot-based analysis tracking
+- File integrity verification
+- Developer contribution tracking
+- **Snapshot comparison (architecture evolution)** ✨ NEW
+- **Cached analysis data per snapshot** ✨ NEW
+- **Smart caching: Skip re-analysis for unchanged repos** ✨ NEW
+- **Zero LLM calls for cached snapshots** ✨ NEW
 
 ## 🏗️ Architecture
 
@@ -152,9 +168,21 @@ curl http://localhost:8000/architecture
 | GET | `/architecture` | Get AI explanation |
 | GET | `/patterns` | Get detected patterns |
 | GET | `/coupling` | Get coupling metrics |
-| POST | `/impact` | Analyze change impact |
+| GET | `/confidence-report` | **Get confidence scores & failure scenarios** ✨ NEW |
+| POST | `/impact` | **Analyze change impact (delete/modify/move)** ✨ |
 | GET | `/dependencies/{path}` | Get file dependencies |
-| GET | `/blast-radius/{path}` | Get affected files |
+| GET | `/blast-radius/{path}` | **Get blast radius with change_type param** ✨ |
+| GET | `/functions` | List all functions |
+| GET | `/graph/data` | Get file dependency graph |
+| GET | `/graph/functions` | Get function call graph |
+| GET | `/graph/function/{name}` | Get function call chain |
+| GET | `/repositories` | List all analyzed repositories |
+| GET | `/repository/{id}/snapshots` | List analysis snapshots |
+| GET | `/repository/{id}/compare-snapshots/{s1}/{s2}` | **Compare snapshots (full analysis)** ✨ |
+| GET | `/repository/{id}/versions` | Get repository version history |
+| GET | `/repository/{id}/file-history` | Get file version chain |
+| POST | `/repository/{id}/check-integrity` | Verify file integrity |
+| GET | `/repository/{id}/contributors` | Get developer contributions |
 
 Full API docs: `http://localhost:8000/docs`
 
@@ -245,6 +273,13 @@ User Query → Hybrid Retrieval (Vector + Graph) → LLM → Cited Explanation
 
 - [API Documentation](docs/API.md)
 - [Database Schema](docs/DATABASE_SCHEMA.md)
+- [Function Graph Feature](docs/FUNCTION_GRAPH.md) ✨ NEW
+- [Blast-Radius Estimator](docs/BLAST_RADIUS.md) ✨ NEW
+- [Snapshot Comparison System](docs/SNAPSHOT_COMPARISON.md) ✨ NEW
+- [Snapshot Caching System](SNAPSHOT_CACHING.md) ✨ NEW
+- [Snapshot Caching Quick Reference](SNAPSHOT_CACHING_QUICK_REF.md) ✨ NEW
+- [Version Tracking System](docs/VERSION_TRACKING.md)
+- [Version Tracking Quick Reference](docs/VERSION_TRACKING_QUICK_REF.md)
 - [Setup Guide](docs/SETUP.md)
 - [Implementation Status](docs/IMPLEMENTATION_STATUS.md)
 
@@ -278,8 +313,11 @@ User Query → Hybrid Retrieval (Vector + Graph) → LLM → Cited Explanation
 - [ ] Enable vector store (PRIORITY 1)
 - [ ] Add Event-Driven pattern detection (PRIORITY 2)
 - [x] Frontend UI with interactive visualizations ✅
+- [x] Function-level call graphs ✅
+- [x] Blast-radius with change simulation (delete/modify/move) ✅ NEW
+- [x] Separate direct vs indirect dependencies ✅ NEW
 - [ ] Real-time analysis progress (WebSocket)
-- [ ] Call graph extraction
+- [ ] Function-to-function calls (not just file-to-function)
 - [ ] Inheritance tracking
 - [ ] Export reports (PDF/JSON)
 - [ ] Support for more languages (C++, Go, Rust)
