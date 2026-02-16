@@ -112,6 +112,26 @@ class AnalysisEngine:
         
         # Full analysis with LLM
         return self._full_analysis(repo_url, repo_path, repo_id)
+    def _is_snapshot_complete(self, snapshot_id: str) -> bool:
+        """Check if a snapshot has all required data (patterns, coupling, files)."""
+        with self.graph_db.driver.session() as session:
+            result = session.run("""
+                MATCH (s:Snapshot {snapshot_id: $sid})
+                WHERE s.patterns IS NOT NULL AND s.coupling IS NOT NULL AND s.total_files > 0
+                OPTIONAL MATCH (s)-[af:ANALYZED_FILE]->()
+                WITH s, COUNT(af) as file_links
+                RETURN s.snapshot_id as sid, file_links, s.snapshot_files as sf
+                """, sid=snapshot_id)
+            record = result.single()
+            if not record:
+                return False
+            # Complete if has live file links OR preserved snapshot_files
+            if record['file_links'] > 0:
+                return True
+            if record['sf'] is not None:
+                return True
+            return False
+    
     def _full_analysis(self, repo_url: str, repo_path: Path, repo_id: str) -> Dict:
         """Perform full analysis with LLM and caching"""
         # Check if snapshot already exists for current commit (prevent duplicates)
@@ -120,11 +140,27 @@ class AnalysisEngine:
             with self.cache_lock:
                 existing = self._get_cached_snapshot(repo_id, commit_info['commit_hash'])
             if existing and existing.get('snapshot_id'):
-                logger.info(f"♻️ Reusing existing snapshot: {existing['snapshot_id'][:8]}")
-                self.current_repo_id = repo_id
-                self.current_snapshot_id = existing['snapshot_id']
-                # Don't create new snapshot, use existing
-                repo_exists = True
+                # Check if the snapshot is actually complete
+                if self._is_snapshot_complete(existing['snapshot_id']):
+                    logger.info(f"♻️ Complete snapshot found: {existing['snapshot_id'][:8]} — skipping re-analysis")
+                    self.current_repo_id = repo_id
+                    self.current_snapshot_id = existing['snapshot_id']
+                    # Rebuild analyzers from cache so they're available for blast radius etc.
+                    self._rebuild_from_cache(repo_id)
+                    return {
+                        'repo_path': str(repo_path),
+                        'repo_id': repo_id,
+                        'total_files': existing.get('total_files', 0),
+                        'patterns': existing.get('patterns', {}),
+                        'coupling': existing.get('coupling', {}),
+                        'architecture': existing.get('architecture', {}),
+                        'status': 'cached'
+                    }
+                else:
+                    logger.info(f"⚠️ Incomplete snapshot {existing['snapshot_id'][:8]} — re-analyzing")
+                    self.current_repo_id = repo_id
+                    self.current_snapshot_id = existing['snapshot_id']
+                    repo_exists = True
             else:
                 # Create new snapshot only if none exists
                 self.current_repo_id, repo_exists, self.current_snapshot_id = self.version_tracker.create_repository(
@@ -150,6 +186,10 @@ class AnalysisEngine:
                 logger.warning(f"   ⚠ Git history not available: {git_result.get('message', 'Unknown')}")
         else:
             logger.info("🔄 Re-analyzing existing repository (tracking new changes)...")
+        
+        # Preserve file data on snapshot edges BEFORE clearing File nodes
+        logger.info("📋 Preserving snapshot file metadata...")
+        self._preserve_snapshot_file_data(self.current_repo_id)
         
         # Only clear graph/vector for THIS repo, not version history
         logger.info("🧹 Clearing analysis data (preserving versions)...")
@@ -268,6 +308,9 @@ class AnalysisEngine:
         self._store_architecture_cache(self.current_repo_id, self.current_snapshot_id, 
                                       patterns, coupling, arch_explanation)
         
+        # Preserve file list on snapshot node for future comparisons
+        self._preserve_snapshot_file_data(self.current_repo_id)
+        
         logger.info(f"\n{'='*60}")
         logger.info("✅ Analysis completed successfully!")
         logger.info(f"{'='*60}\n")
@@ -308,16 +351,8 @@ class AnalysisEngine:
                 self.current_repo_id = repo_id
                 self.repo_path = Path(record['path'])
                 
-                # Rebuild dependency graph from stored data
-                files = self.graph_db.get_all_files()
-                parsed_files = [{'file': f} for f in files]
-                self.dependency_mapper = DependencyMapper()
-                self.dependency_mapper.build_graph(parsed_files)
-                
-                # Rebuild analyzers
-                self.pattern_detector = PatternDetector(self.dependency_mapper.graph)
-                self.coupling_analyzer = CouplingAnalyzer(self.dependency_mapper.graph)
-                self.blast_radius_analyzer = BlastRadiusAnalyzer(self.dependency_mapper, self.graph_db)
+                # Rebuild dependency graph from stored data (with imports & dependencies)
+                self._rebuild_from_cache(repo_id)
                 
                 logger.info(f"✅ Loaded analysis for repo {repo_id}")
                 return True
@@ -334,9 +369,10 @@ class AnalysisEngine:
         
         if not self.pattern_detector:
             return {
-                'macro': 'No analysis completed yet. Please analyze a repository first.',
-                'meso': '',
-                'micro': '',
+                'overview': 'No analysis completed yet. Please analyze a repository first.',
+                'modules': '',
+                'key_files': '',
+                'stats': {},
                 'evidence': []
             }
         
@@ -357,6 +393,8 @@ class AnalysisEngine:
                 cached = self._get_cached_architecture(self.current_repo_id, commit_hash)
             if cached:
                 logger.info("📦 Using database cached architecture")
+                # Compute stats on-the-fly for cached text data
+                cached['stats'] = self._compute_arch_stats()
                 with self.cache_lock:
                     self.memory_cache[cache_key] = cached
                     self._enforce_cache_limit()
@@ -389,13 +427,49 @@ class AnalysisEngine:
         
         return arch_explanation
     
+    def _compute_arch_stats(self) -> Dict:
+        """Compute structural stats from existing analyzers (no LLM needed)"""
+        all_files = self.graph_db.get_all_files()
+        graph_data = self.graph_db.get_graph_data(limit=100)
+        coupling_data = self.coupling_analyzer.analyze() if self.coupling_analyzer else {}
+        cycles = self.dependency_mapper.detect_cycles() if self.dependency_mapper else []
+        patterns = self.pattern_detector.detect_patterns() if self.pattern_detector else {}
+        
+        directories = {}
+        for fp in all_files:
+            if not fp:
+                continue
+            parts = fp.replace('\\', '/').split('/')
+            if len(parts) > 1:
+                directories[parts[-2]] = directories.get(parts[-2], 0) + 1
+        top_dirs_list = sorted(directories.items(), key=lambda x: x[1], reverse=True)[:8]
+        
+        detected_patterns = []
+        for name, data in patterns.items():
+            if data.get('detected'):
+                detected_patterns.append({
+                    'name': name,
+                    'confidence': round(data.get('confidence', 0), 2),
+                    'layers': data.get('layers', [])
+                })
+        
+        return {
+            'total_files': len(all_files),
+            'total_dependencies': len(graph_data.get('edges', [])),
+            'avg_coupling': round(coupling_data.get('metrics', {}).get('avg_coupling', 0), 2),
+            'cycle_count': len(cycles),
+            'detected_patterns': detected_patterns,
+            'top_directories': [{'name': d, 'count': c} for d, c in top_dirs_list]
+        }
+    
     def _generate_and_cache_architecture(self) -> Dict:
         """Generate architecture explanation using LLM"""
         if not self.pattern_detector:
             return {
-                'macro': 'No analysis completed yet.',
-                'meso': '',
-                'micro': '',
+                'overview': 'No analysis completed yet.',
+                'modules': '',
+                'key_files': '',
+                'stats': {},
                 'evidence': []
             }
         
@@ -416,20 +490,66 @@ class AnalysisEngine:
             "system architecture patterns modules structure"
         )
         
-        # Generate explanations using LLM with graph context
-        macro_explanation = self.llm.explain_architecture(evidence['evidence'])
+        # Compute structural stats (no LLM tokens needed)
+        coupling_data = self.coupling_analyzer.analyze() if self.coupling_analyzer else {}
+        cycles = self.dependency_mapper.detect_cycles() if self.dependency_mapper else []
         
-        # Generate meso level with graph structure
-        meso_explanation = self.llm.explain_meso_level(patterns, graph_context)
+        # Build top directories
+        directories = {}
+        for fp in all_files:
+            if not fp:
+                continue
+            parts = fp.replace('\\', '/').split('/')
+            if len(parts) > 1:
+                directories[parts[-2]] = directories.get(parts[-2], 0) + 1
+        top_dirs_list = sorted(directories.items(), key=lambda x: x[1], reverse=True)[:8]
+        top_dirs_text = '\n'.join([f"  {d}/: {c} files" for d, c in top_dirs_list])
         
-        # Generate micro level with detailed file analysis
-        micro_explanation = self.llm.explain_micro_level(all_files[:20], graph_data)
+        # Build detected patterns list
+        detected_patterns = []
+        for name, data in patterns.items():
+            if data.get('detected'):
+                detected_patterns.append({
+                    'name': name,
+                    'confidence': round(data.get('confidence', 0), 2),
+                    'layers': data.get('layers', [])
+                })
+        
+        # Format patterns for LLM prompt
+        patterns_text = self.llm._format_patterns(patterns)
+        
+        # Format evidence for LLM prompt (limit to save tokens)
+        evidence_items = evidence.get('evidence', [])[:3]
+        evidence_text = '\n'.join([
+            f"File: {e.get('file', 'unknown')}\n{e.get('code', '')[:200]}"
+            for e in evidence_items
+        ])
+        
+        # Single LLM call instead of 3
+        logger.info("🤖 Generating architecture report (single LLM call)...")
+        sections = self.llm.explain_architecture_report(
+            patterns_text, graph_context, top_dirs_text, evidence_text
+        )
+        
+        stats = {
+            'total_files': len(all_files),
+            'total_dependencies': len(graph_data.get('edges', [])),
+            'avg_coupling': round(coupling_data.get('metrics', {}).get('avg_coupling', 0), 2),
+            'cycle_count': len(cycles),
+            'detected_patterns': detected_patterns,
+            'top_directories': [{'name': d, 'count': c} for d, c in top_dirs_list]
+        }
         
         result = {
-            'macro': macro_explanation.get('explanation', 'Architecture analysis in progress'),
-            'meso': meso_explanation,
-            'micro': micro_explanation,
-            'evidence': evidence['evidence'][:5]
+            'overview': sections.get('overview', ''),
+            'modules': sections.get('modules', ''),
+            'key_files': sections.get('key_files', ''),
+            'stats': stats,
+            'evidence': evidence_items[:5],
+            # Keep backward compat for cache
+            'macro': sections.get('overview', ''),
+            'meso': sections.get('modules', ''),
+            'micro': sections.get('key_files', '')
         }
         return result
     
@@ -523,18 +643,37 @@ class AnalysisEngine:
                 """, repo_id=repo_id)
             
             parsed_files = []
+            deps_map = {}  # file -> list of dependency file paths
             for r in result:
+                file_path = r['file']
+                imports = [imp for imp in r['imports'] if imp]
+                deps = [d for d in r['dependencies'] if d]
                 parsed_files.append({
-                    'file': r['file'],
+                    'file': file_path,
                     'language': r['language'] or 'python',
-                    'imports': [imp for imp in r['imports'] if imp],
+                    'imports': imports,
                     'classes': [{'name': c} for c in r['classes'] if c],
                     'functions': [{'name': f} for f in r['functions'] if f]
                 })
+                if deps:
+                    deps_map[file_path] = deps
         
-        # Rebuild dependency graph with actual data
+        # Rebuild dependency graph with import data
         self.dependency_mapper = DependencyMapper()
         self.dependency_mapper.build_graph(parsed_files)
+        
+        # Also add pre-resolved DEPENDS_ON edges from Neo4j
+        # (import name resolution may miss some when loading from cache)
+        added_deps = 0
+        for source, targets in deps_map.items():
+            for target in targets:
+                if not self.dependency_mapper.graph.has_edge(source, target):
+                    self.dependency_mapper.graph.add_edge(source, target, type='depends_on')
+                    added_deps += 1
+        if added_deps > 0:
+            logger.info(f"   🔗 Added {added_deps} DEPENDS_ON edges from cache")
+        
+        logger.info(f"   📊 Rebuilt graph: {self.dependency_mapper.graph.number_of_nodes()} nodes, {self.dependency_mapper.graph.number_of_edges()} edges")
         
         # Rebuild analyzers
         self.pattern_detector = PatternDetector(self.dependency_mapper.graph)
@@ -559,10 +698,14 @@ class AnalysisEngine:
             record = result.single()
             if record:
                 return {
-                    'macro': record['macro'],
-                    'meso': record['meso'],
-                    'micro': record['micro'],
+                    'overview': record['macro'] or '',
+                    'modules': record['meso'] or '',
+                    'key_files': record['micro'] or '',
+                    'macro': record['macro'] or '',
+                    'meso': record['meso'] or '',
+                    'micro': record['micro'] or '',
                     'evidence': [],
+                    'stats': {},
                     'cached': True
                 }
             return None
@@ -842,6 +985,34 @@ Provide a concise 2-3 sentence summary explaining:
         
         return '\n'.join(parts)
     
+    def _preserve_snapshot_file_data(self, repo_id: str):
+        """Store file_path + content_hash as a JSON property on Snapshot nodes.
+        DETACH DELETE on File nodes also removes ANALYZED_FILE edges,
+        so we store the file list directly on the Snapshot node."""
+        import json
+        with self.graph_db.driver.session() as session:
+            # Get all snapshots that don't yet have preserved file data
+            result = session.run("""
+                MATCH (r:Repository {repo_id: $repo_id})-[:HAS_SNAPSHOT]->(s:Snapshot)
+                WHERE s.snapshot_files IS NULL
+                MATCH (s)-[:ANALYZED_FILE]->(f:File)
+                WITH s, collect({path: f.file_path, hash: f.content_hash}) as files
+                RETURN s.snapshot_id as sid, files
+                """, repo_id=repo_id)
+            
+            count = 0
+            for record in result:
+                session.run("""
+                    MATCH (s:Snapshot {snapshot_id: $sid})
+                    SET s.snapshot_files = $files_json
+                    """, sid=record['sid'], files_json=json.dumps(record['files']))
+                count += 1
+            
+            if count > 0:
+                logger.info(f"   ✓ Preserved file data for {count} snapshot(s)")
+            else:
+                logger.info("   ✓ All snapshots already preserved")
+    
     def _clear_repo_analysis(self, repo_id: str):
         """Clear only analysis nodes (File/Class/Function), keep Repository/Commit/Version nodes"""
         with self.graph_db.driver.session() as session:
@@ -894,18 +1065,47 @@ Provide a concise 2-3 sentence summary explaining:
             coupling1 = json.loads(record['c1']) if record['c1'] else {}
             coupling2 = json.loads(record['c2']) if record['c2'] else {}
             
-            # Get file changes with content hashes
-            file_result = session.run("""
-                MATCH (s1:Snapshot {snapshot_id: $snapshot1})-[:ANALYZED_FILE]->(f1:File)
-                WITH collect({path: f1.file_path, hash: f1.content_hash}) as files1
-                MATCH (s2:Snapshot {snapshot_id: $snapshot2})-[:ANALYZED_FILE]->(f2:File)
-                WITH files1, collect({path: f2.file_path, hash: f2.content_hash}) as files2
-                RETURN files1, files2
-                """, snapshot1=snapshot1, snapshot2=snapshot2)
-            file_record = file_result.single()
+            # Get file changes - try live File nodes first, fall back to snapshot_files property
+            files1_raw = []
+            files2_raw = []
             
-            if not file_record:
-                return {"error": "No files found in snapshots"}
+            # Try live File nodes for snapshot 1
+            r1 = session.run("""
+                MATCH (s1:Snapshot {snapshot_id: $sid})-[:ANALYZED_FILE]->(f:File)
+                RETURN collect({path: f.file_path, hash: f.content_hash}) as files
+                """, sid=snapshot1)
+            rec1 = r1.single()
+            if rec1 and rec1['files']:
+                files1_raw = rec1['files']
+            else:
+                # Fall back to preserved snapshot_files property
+                r1b = session.run("""
+                    MATCH (s1:Snapshot {snapshot_id: $sid})
+                    RETURN s1.snapshot_files as sf
+                    """, sid=snapshot1)
+                rec1b = r1b.single()
+                if rec1b and rec1b['sf']:
+                    files1_raw = json.loads(rec1b['sf'])
+                    logger.info(f"📂 Using preserved file data for snapshot {snapshot1[:8]}")
+            
+            # Try live File nodes for snapshot 2
+            r2 = session.run("""
+                MATCH (s2:Snapshot {snapshot_id: $sid})-[:ANALYZED_FILE]->(f:File)
+                RETURN collect({path: f.file_path, hash: f.content_hash}) as files
+                """, sid=snapshot2)
+            rec2 = r2.single()
+            if rec2 and rec2['files']:
+                files2_raw = rec2['files']
+            else:
+                # Fall back to preserved snapshot_files property
+                r2b = session.run("""
+                    MATCH (s2:Snapshot {snapshot_id: $sid})
+                    RETURN s2.snapshot_files as sf
+                    """, sid=snapshot2)
+                rec2b = r2b.single()
+                if rec2b and rec2b['sf']:
+                    files2_raw = json.loads(rec2b['sf'])
+                    logger.info(f"📂 Using preserved file data for snapshot {snapshot2[:8]}")
             
             # Normalize paths to relative (strip repo root) for accurate cross-snapshot comparison
             def _normalize_path(p):
@@ -927,16 +1127,16 @@ Provide a concise 2-3 sentence summary explaining:
                 return '/'.join(parts[-3:]) if len(parts) >= 3 else p
             
             files1_map = {}
-            for f in (file_record['files1'] or []):
+            for f in (files1_raw or []):
                 if f.get('path'):
                     norm = _normalize_path(f['path'])
-                    files1_map[norm] = f['hash']
+                    files1_map[norm] = f.get('hash')
             
             files2_map = {}
-            for f in (file_record['files2'] or []):
+            for f in (files2_raw or []):
                 if f.get('path'):
                     norm = _normalize_path(f['path'])
-                    files2_map[norm] = f['hash']
+                    files2_map[norm] = f.get('hash')
             
             paths1 = set(files1_map.keys())
             paths2 = set(files2_map.keys())
@@ -1030,6 +1230,9 @@ Provide a concise 2-3 sentence summary explaining:
                     "risk_level": "high" if len(risk_areas) >= 3 else "medium" if len(risk_areas) >= 1 else "low",
                     "risk_areas": risk_areas
                 },
+                "structural_risks": self._compute_risks_for_changed_files(
+                    added_files + modified_files
+                ),
                 "summary": self._generate_comparison_summary(record, pattern_changes, coupling_delta, cycle_delta, len(added_files), len(removed_files), len(modified_files))
             }
     
@@ -1058,6 +1261,31 @@ Provide a concise 2-3 sentence summary explaining:
                     changes[pattern] = f"confidence_changed: {conf_delta:+.2f}"
         
         return changes
+    
+    def _compute_risks_for_changed_files(self, changed_files: list) -> list:
+        """Compute structural risk for changed files using current graph."""
+        if not self.coupling_analyzer or not changed_files:
+            return []
+        
+        risks = []
+        for fp in changed_files[:30]:  # limit to avoid slowdowns
+            if not fp:
+                continue
+            risk = self.coupling_analyzer.compute_structural_risk(fp)
+            if risk['level'] == 'unknown':
+                # Try flexible matching by filename
+                fname = fp.replace('\\', '/').split('/')[-1]
+                for node in self.coupling_analyzer.graph.nodes():
+                    if node.replace('\\', '/').split('/')[-1] == fname:
+                        risk = self.coupling_analyzer.compute_structural_risk(node)
+                        if risk['level'] != 'unknown':
+                            break
+            if risk['score'] > 0:
+                risk['file'] = fp
+                risks.append(risk)
+        
+        risks.sort(key=lambda x: x['score'], reverse=True)
+        return risks[:10]
     
     def _generate_comparison_summary(self, record: Dict, pattern_changes: Dict, 
                                      coupling_delta: float, cycle_delta: int,

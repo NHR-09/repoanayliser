@@ -186,6 +186,7 @@ class PatternDetector:
 class CouplingAnalyzer:
     def __init__(self, graph: nx.DiGraph):
         self.graph = graph
+        self._cycles_cache = None
     
     def analyze(self) -> Dict:
         return {
@@ -193,6 +194,79 @@ class CouplingAnalyzer:
             'cycles': self._detect_cycles(),
             'metrics': self._calculate_metrics()
         }
+    
+    def compute_structural_risk(self, file_path: str) -> Dict:
+        """Compute structural risk score for a single file.
+        
+        Score formula:
+        - fan_in * 8 (many dependents = risky to change)
+        - fan_out * 5 (many dependencies = fragile)
+        - +30 if participates in circular dependency
+        - +10 bonus if fan_in > 5
+        - +10 bonus if fan_out > 5
+        Capped at 100.
+        """
+        if file_path not in self.graph:
+            return {'score': 0, 'level': 'unknown', 'fan_in': 0, 'fan_out': 0, 'in_cycle': False, 'breakdown': {}}
+        
+        fan_in = self.graph.in_degree(file_path)
+        fan_out = self.graph.out_degree(file_path)
+        
+        # Check if file is in any cycle
+        cycles = self._get_cycles_cached()
+        in_cycle = any(file_path in cycle for cycle in cycles)
+        
+        # Calculate score
+        score = fan_in * 8 + fan_out * 5
+        if in_cycle:
+            score += 30
+        if fan_in > 5:
+            score += 10
+        if fan_out > 5:
+            score += 10
+        score = min(score, 100)
+        
+        # Determine level
+        if score >= 80:
+            level = 'critical'
+        elif score >= 60:
+            level = 'high'
+        elif score >= 30:
+            level = 'medium'
+        else:
+            level = 'low'
+        
+        return {
+            'score': score,
+            'level': level,
+            'fan_in': fan_in,
+            'fan_out': fan_out,
+            'in_cycle': in_cycle,
+            'breakdown': {
+                'fan_in_pts': fan_in * 8,
+                'fan_out_pts': fan_out * 5,
+                'cycle_pts': 30 if in_cycle else 0,
+                'high_fan_in_bonus': 10 if fan_in > 5 else 0,
+                'high_fan_out_bonus': 10 if fan_out > 5 else 0
+            }
+        }
+    
+    def compute_risk_for_all(self, top_n: int = None) -> List[Dict]:
+        """Compute structural risk for all files, sorted by score descending."""
+        risks = []
+        for node in self.graph.nodes():
+            risk = self.compute_structural_risk(node)
+            risk['file'] = node
+            risks.append(risk)
+        risks.sort(key=lambda x: x['score'], reverse=True)
+        if top_n:
+            risks = risks[:top_n]
+        return risks
+    
+    def _get_cycles_cached(self) -> List:
+        if self._cycles_cache is None:
+            self._cycles_cache = self._detect_cycles()
+        return self._cycles_cache
     
     def _find_high_coupling(self, threshold: int = 5) -> List[Dict]:
         high = []
@@ -215,3 +289,4 @@ class CouplingAnalyzer:
             'total_dependencies': self.graph.number_of_edges(),
             'avg_coupling': self.graph.number_of_edges() / max(self.graph.number_of_nodes(), 1)
         }
+

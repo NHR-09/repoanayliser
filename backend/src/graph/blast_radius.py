@@ -54,6 +54,9 @@ class BlastRadiusAnalyzer:
         else:  # modify
             risk = self._assess_modify_risk(direct, indirect)
         
+        # Compute structural risk (fan-in, fan-out, cycle presence)
+        structural_risk = self._compute_structural_risk(file_path, resolved_path)
+        
         return {
             "file": file_path,
             "change_type": change_type,
@@ -63,12 +66,36 @@ class BlastRadiusAnalyzer:
             "functions_affected": function_impact,
             "risk_level": risk["level"],
             "risk_score": risk["score"],
+            "structural_risk": structural_risk,
             "impact_breakdown": {
                 "direct_count": len(direct),
                 "indirect_count": len(indirect),
                 "function_callers": len(function_impact.get("callers", []))
             }
         }
+    
+    def _compute_structural_risk(self, file_path: str, resolved_path: str) -> Dict:
+        """Compute structural risk using CouplingAnalyzer on the dependency graph."""
+        from .analyzers import CouplingAnalyzer
+        try:
+            graph = self.dependency_mapper.graph
+            analyzer = CouplingAnalyzer(graph)
+            # Try both original and resolved paths
+            risk = analyzer.compute_structural_risk(resolved_path)
+            if risk['level'] == 'unknown':
+                risk = analyzer.compute_structural_risk(file_path)
+            if risk['level'] == 'unknown':
+                # Try flexible node matching
+                fwd = file_path.replace('\\', '/')
+                for node in graph.nodes():
+                    if node.replace('\\', '/').endswith(fwd.split('/')[-1]):
+                        risk = analyzer.compute_structural_risk(node)
+                        if risk['level'] != 'unknown':
+                            break
+            return risk
+        except Exception as e:
+            logger.warning(f"Could not compute structural risk: {e}")
+            return {'score': 0, 'level': 'unknown', 'fan_in': 0, 'fan_out': 0, 'in_cycle': False, 'breakdown': {}}
     
     def _get_direct_dependents(self, file_path: str, file_path_fwd: str = None, repo_id: str = None) -> Set[str]:
         """Files that directly import/depend on this file"""

@@ -253,6 +253,41 @@ function SnapshotComparison({ repoId }) {
               </div>
             </div>
           </div>
+
+          {/* Structural Risk — Changed Files */}
+          {comparison.structural_risks && comparison.structural_risks.length > 0 && (
+            <div style={styles.riskSection}>
+              <h5>🎯 Structural Risk — Changed Files</h5>
+              <div style={styles.riskDescription}>
+                Files changed in this comparison ranked by structural risk (fan-in, fan-out, circular dependencies)
+              </div>
+              <div style={styles.riskFileList}>
+                {comparison.structural_risks.map((risk, idx) => (
+                  <div key={idx} style={styles.riskFileCard}>
+                    <div style={styles.riskFileHeader}>
+                      <span style={styles.riskFileName}>
+                        {risk.file ? risk.file.split(/[\\/]/).slice(-2).join('/') : 'N/A'}
+                      </span>
+                      <span style={{
+                        ...styles.riskBadge,
+                        background: risk.level === 'critical' ? '#fee2e2' : risk.level === 'high' ? '#fef3c7' : risk.level === 'medium' ? '#e0f2fe' : '#d1fae5',
+                        color: risk.level === 'critical' ? '#991b1b' : risk.level === 'high' ? '#92400e' : risk.level === 'medium' ? '#0c4a6e' : '#065f46'
+                      }}>
+                        {risk.level?.toUpperCase()} ({risk.score}/100)
+                      </span>
+                    </div>
+                    <div style={styles.riskFileDetails}>
+                      <span>📥 Fan-in: <strong>{risk.fan_in}</strong></span>
+                      <span>📤 Fan-out: <strong>{risk.fan_out}</strong></span>
+                      {risk.in_cycle && (
+                        <span style={{color: '#ef4444', fontWeight: 'bold'}}>🔄 In Cycle</span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -527,6 +562,53 @@ const styles = {
   couplingValue: {
     fontSize: '24px',
     fontWeight: 'bold'
+  },
+  riskSection: {
+    marginTop: '20px',
+    padding: '15px',
+    background: '#fef7ff',
+    borderRadius: '8px',
+    border: '1px solid #e8b4f8'
+  },
+  riskDescription: {
+    fontSize: '12px',
+    color: '#666',
+    marginBottom: '12px',
+    marginTop: '4px'
+  },
+  riskFileList: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px'
+  },
+  riskFileCard: {
+    padding: '12px',
+    background: 'white',
+    borderRadius: '6px',
+    border: '1px solid #e5e7eb'
+  },
+  riskFileHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '6px'
+  },
+  riskFileName: {
+    fontSize: '13px',
+    fontWeight: '600',
+    color: '#1f2937'
+  },
+  riskBadge: {
+    padding: '3px 10px',
+    borderRadius: '10px',
+    fontSize: '11px',
+    fontWeight: 'bold'
+  },
+  riskFileDetails: {
+    display: 'flex',
+    gap: '16px',
+    fontSize: '12px',
+    color: '#4b5563'
   }
 };
 

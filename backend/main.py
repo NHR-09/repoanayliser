@@ -184,10 +184,10 @@ async def delete_snapshot(repo_id: str, snapshot_id: str):
     """Delete a specific snapshot"""
     with engine.graph_db.driver.session() as session:
         result = session.run("""
-            MATCH (s:Snapshot {snapshot_id: $snapshot_id})
+            MATCH (r:Repository {repo_id: $repo_id})-[:HAS_SNAPSHOT]->(s:Snapshot {snapshot_id: $snapshot_id})
             DETACH DELETE s
             RETURN count(s) as deleted
-            """, snapshot_id=snapshot_id)
+            """, repo_id=repo_id, snapshot_id=snapshot_id)
         record = result.single()
         deleted_count = record['deleted'] if record else 0
     return {"status": "success", "deleted": deleted_count}

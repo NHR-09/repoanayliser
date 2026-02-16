@@ -76,6 +76,63 @@ Provide a detailed micro-level analysis covering:
 Be concise and focus on the most important files."""
         return self._call_llm(prompt)
     
+    def explain_architecture_report(self, patterns_text: str, graph_context: str, top_dirs: str, evidence_text: str) -> Dict:
+        """Single consolidated architecture explanation — replaces 3 separate calls"""
+        prompt = f"""You are analyzing a software repository. Based on the data below, provide a structured architecture report.
+
+Detected Patterns:
+{patterns_text}
+
+Graph Structure:
+{graph_context}
+
+Directory Breakdown:
+{top_dirs}
+
+Code Evidence:
+{evidence_text}
+
+Respond with EXACTLY these 3 sections using the headers below. Keep each section to 3-5 sentences. Be specific and cite file names.
+
+## Overview
+(Overall architecture style, main patterns, and system purpose)
+
+## Modules
+(Key modules/layers, their responsibilities, and how they interact)
+
+## Key Files
+(Most critical files in the system and why they matter)"""
+        
+        response = self._call_llm_with_limit(prompt, max_tokens=1200)
+        
+        # Parse sections from response
+        sections = {'overview': '', 'modules': '', 'key_files': ''}
+        current = None
+        lines = response.split('\n')
+        for line in lines:
+            lower = line.lower().strip()
+            if '## overview' in lower or '**overview**' in lower:
+                current = 'overview'
+                continue
+            elif '## modules' in lower or '**modules**' in lower or '## module' in lower:
+                current = 'modules'
+                continue
+            elif '## key files' in lower or '**key files**' in lower or '## key file' in lower:
+                current = 'key_files'
+                continue
+            if current:
+                sections[current] += line + '\n'
+        
+        # Trim whitespace
+        for k in sections:
+            sections[k] = sections[k].strip()
+        
+        # Fallback if parsing failed
+        if not sections['overview'] and not sections['modules']:
+            sections['overview'] = response
+        
+        return sections
+    
     def _format_patterns(self, patterns: Dict) -> str:
         """Format patterns for LLM prompt"""
         lines = []
@@ -158,5 +215,14 @@ Be concise and cite specific files."""
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=2000
+        )
+        return response.choices[0].message.content
+    
+    def _call_llm_with_limit(self, prompt: str, max_tokens: int = 1200) -> str:
+        response = self.client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=max_tokens
         )
         return response.choices[0].message.content

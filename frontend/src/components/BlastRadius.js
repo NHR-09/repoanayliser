@@ -227,6 +227,36 @@ export default function BlastRadius({ repoId }) {
               <div style={styles.line}>
                 <Highlighter color="#FFED4A">TOTAL AFFECTED:</Highlighter> {result.total_affected || 0} files
               </div>
+
+              {result.structural_risk && result.structural_risk.score > 0 && (
+                <>
+                  <div style={styles.line}></div>
+                  <div style={styles.line}>
+                    <Highlighter color="#FF82F0">STRUCTURAL RISK:</Highlighter>{' '}
+                    <span style={{color: getRiskColor(result.structural_risk.level), fontWeight: 'bold'}}>
+                      {result.structural_risk.level?.toUpperCase()}
+                    </span>
+                    {` (${result.structural_risk.score}/100)`}
+                  </div>
+                  <div style={styles.line}>
+                    {'  '}📥 Fan-in:  {result.structural_risk.fan_in}{' '}
+                    <span style={{color: result.structural_risk.fan_in > 5 ? '#FF8844' : '#82FFAD'}}>
+                      {result.structural_risk.fan_in > 5 ? '⚠ HIGH' : '✓'}
+                    </span>
+                  </div>
+                  <div style={styles.line}>
+                    {'  '}📤 Fan-out: {result.structural_risk.fan_out}{' '}
+                    <span style={{color: result.structural_risk.fan_out > 5 ? '#FF8844' : '#82FFAD'}}>
+                      {result.structural_risk.fan_out > 5 ? '⚠ HIGH' : '✓'}
+                    </span>
+                  </div>
+                  {result.structural_risk.in_cycle && (
+                    <div style={styles.line}>
+                      {'  '}<span style={{color: '#FF4444'}}>🔄 CIRCULAR DEPENDENCY DETECTED (+30 risk)</span>
+                    </div>
+                  )}
+                </>
+              )}
               
               {result.explanation && (
                 <>
