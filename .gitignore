@@ -11,10 +11,24 @@ ENV/
 dist/
 build/
 
-# Environment
+# Environment & API Keys
 .env
 *.env
 !.env.example
+.env.local
+.env.*.local
+
+# API Keys & Secrets
+**/GROQ_API_KEY*
+**/OPENAI_API_KEY*
+**/ANTHROPIC_API_KEY*
+**/*_API_KEY*
+**/*_SECRET*
+**/secrets.json
+**/credentials.json
+**/*.pem
+**/*.key
+!**/*.key.example
 
 # Databases
 backend/chroma_db/
@@ -52,7 +66,10 @@ test_output/
 .DS_Store
 Thums.db
 
-# Node modules (if frontend added)
+# Node modules (frontend)
+frontend/node_modules/
+frontend/build/
+frontend/package-lock.json
 node_modules/
 package-lock.json
 

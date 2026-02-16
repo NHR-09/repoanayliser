@@ -29,6 +29,62 @@ class LLMReasoner:
             'evidence': [e['file'] for e in evidence]
         }
     
+    def explain_function(self, function_name: str, function_info: Dict, callers: List[Dict], context: List[Dict]) -> str:
+        """Generate LLM explanation for a function"""
+        prompt = self._build_function_prompt(function_name, function_info, callers, context)
+        return self._call_llm(prompt)
+    
+    def explain_meso_level(self, patterns: Dict, graph_context: str) -> str:
+        """Generate meso-level explanation with graph structure"""
+        prompt = f"""Analyze the module-level architecture based on detected patterns and graph structure.
+
+Detected Patterns:
+{self._format_patterns(patterns)}
+
+Graph Structure:
+{graph_context}
+
+Provide a detailed meso-level analysis covering:
+1. Module organization and responsibilities
+2. Layer separation and boundaries
+3. Key architectural components
+4. Module interaction patterns
+5. Design principles observed
+
+Be specific and cite the graph structure."""
+        return self._call_llm(prompt)
+    
+    def explain_micro_level(self, files: List[str], graph_data: Dict) -> str:
+        """Generate micro-level explanation with file details"""
+        file_summary = '\n'.join([f"- {f.split('/')[-1]}" for f in files[:15]])
+        
+        prompt = f"""Analyze the file-level architecture details.
+
+Key Files:
+{file_summary}
+
+Dependency Count: {len(graph_data.get('edges', []))} relationships
+
+Provide a detailed micro-level analysis covering:
+1. Critical files and their roles
+2. File organization patterns
+3. Import/dependency patterns
+4. Code structure observations
+5. Key functions and classes
+
+Be concise and focus on the most important files."""
+        return self._call_llm(prompt)
+    
+    def _format_patterns(self, patterns: Dict) -> str:
+        """Format patterns for LLM prompt"""
+        lines = []
+        for name, data in patterns.items():
+            if data.get('detected'):
+                lines.append(f"{name.upper()}: {data.get('confidence', 0)*100:.0f}% confidence")
+                if 'layers' in data:
+                    lines.append(f"  Layers: {', '.join(data['layers'])}")
+        return '\n'.join(lines) if lines else 'No patterns detected'
+    
     def _build_architecture_prompt(self, evidence: List[Dict]) -> str:
         evidence_text = "\n\n".join([
             f"File: {e['file']}\n{e['code']}"
@@ -62,6 +118,36 @@ Evidence:
 {evidence_text}
 
 Explain what consequences this change may have. Cite specific files."""
+    
+    def _build_function_prompt(self, function_name: str, function_info: Dict, callers: List[Dict], context: List[Dict]) -> str:
+        """Build prompt for function explanation"""
+        caller_text = "\n".join([
+            f"- {c['caller_name']} in {c['caller_file']}"
+            for c in callers
+        ]) if callers else "No direct callers found"
+        
+        context_text = "\n\n".join([
+            f"Related code in {c['metadata']['file_path']}:\n{c['code']}"
+            for c in context
+        ]) if context else "No additional context"
+        
+        return f"""Analyze the function: {function_name}
+
+Location: {function_info.get('file')} (line {function_info.get('line')})
+
+Called by:
+{caller_text}
+
+Related code context:
+{context_text}
+
+Provide:
+1. Purpose of this function
+2. How it's used in the codebase
+3. Impact if modified
+4. Key dependencies
+
+Be concise and cite specific files."""
     
     def _call_llm(self, prompt: str) -> str:
         response = self.client.chat.completions.create(

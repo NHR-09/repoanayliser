@@ -44,11 +44,11 @@ Developers spend **more time understanding codebases than writing code**. Modern
 
 ```
 ┌──────────────┐
-│   Frontend   │  (React + D3.js)
+│   Frontend   │  (React + D3.js) ✅ COMPLETE
 └──────┬───────┘
        │ HTTP
 ┌──────▼────────────┐
-│  Backend Server   │  (FastAPI)
+│  Backend Server   │  (FastAPI) ✅ WORKING
 │ Analysis Engine   │
 └──────┬────┬───────┘
        │    │
@@ -70,23 +70,26 @@ Developers spend **more time understanding codebases than writing code**. Modern
 
 ### Prerequisites
 - Python 3.9+
+- Node.js 16+
 - Neo4j 5.x
 - Git
 
-### Quick Start
+### Quick Start (Full Stack)
+
+**Option 1: Automated (Windows)**
+```bash
+start_all.bat
+```
+
+**Option 2: Manual Setup**
 
 1. **Clone repository**
 ```bash
 git clone <repo-url>
-cd ARCHITECH/backend
+cd ARCHITECH
 ```
 
-2. **Install dependencies**
-```bash
-pip install -r requirements.txt
-```
-
-3. **Start Neo4j**
+2. **Start Neo4j**
 ```bash
 docker run -d --name neo4j \
   -p 7474:7474 -p 7687:7687 \
@@ -94,18 +97,27 @@ docker run -d --name neo4j \
   neo4j:5.14
 ```
 
-4. **Configure environment**
+3. **Setup Backend**
 ```bash
+cd backend
+pip install -r requirements.txt
 cp .env.example .env
 # Edit .env with your API keys
-```
-
-5. **Run backend**
-```bash
 python main.py
 ```
 
-Server runs at `http://localhost:8000`
+4. **Setup Frontend** (in new terminal)
+```bash
+cd frontend
+npm install
+npm start
+```
+
+**Access Points:**
+- Frontend: `http://localhost:3000`
+- Backend API: `http://localhost:8000`
+- API Docs: `http://localhost:8000/docs`
+- Neo4j Browser: `http://localhost:7474`
 
 ## 🧪 Testing
 
@@ -265,7 +277,7 @@ User Query → Hybrid Retrieval (Vector + Graph) → LLM → Cited Explanation
 - [ ] Fix path normalization (PRIORITY 1)
 - [ ] Enable vector store (PRIORITY 1)
 - [ ] Add Event-Driven pattern detection (PRIORITY 2)
-- [ ] Frontend UI with interactive visualizations
+- [x] Frontend UI with interactive visualizations ✅
 - [ ] Real-time analysis progress (WebSocket)
 - [ ] Call graph extraction
 - [ ] Inheritance tracking

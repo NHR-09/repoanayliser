@@ -26,7 +26,8 @@ class StaticParser:
             'language': language,
             'classes': self._extract_classes(tree.root_node, code),
             'functions': self._extract_functions(tree.root_node, code),
-            'imports': self._extract_imports(tree.root_node, code, language)
+            'imports': self._extract_imports(tree.root_node, code, language),
+            'function_calls': self._extract_function_calls(tree.root_node, code, language)
         }
     
     def _extract_classes(self, node, code) -> List[Dict]:
@@ -69,6 +70,29 @@ class StaticParser:
         for child in node.children:
             imports.extend(self._extract_imports(child, code, language))
         return imports
+    
+    def _extract_function_calls(self, node, code, language) -> List[str]:
+        """Extract function calls from code"""
+        calls = []
+        if language == 'python' and node.type == 'call':
+            func_node = node.child_by_field_name('function')
+            if func_node:
+                if func_node.type == 'identifier':
+                    calls.append(self._get_node_text(func_node, code))
+                elif func_node.type == 'attribute':
+                    calls.append(self._get_node_text(func_node, code).split('.')[-1])
+        elif language == 'javascript' and node.type == 'call_expression':
+            func_node = node.child_by_field_name('function')
+            if func_node:
+                if func_node.type == 'identifier':
+                    calls.append(self._get_node_text(func_node, code))
+                elif func_node.type == 'member_expression':
+                    prop = func_node.child_by_field_name('property')
+                    if prop:
+                        calls.append(self._get_node_text(prop, code))
+        for child in node.children:
+            calls.extend(self._extract_function_calls(child, code, language))
+        return calls
     
     def _get_node_text(self, node, code) -> str:
         if not node:

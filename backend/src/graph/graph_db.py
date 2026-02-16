@@ -89,6 +89,19 @@ class GraphDB:
                 module_name=module_name
             )
     
+    def create_function_call(self, from_file: str, called_function: str):
+        """Create CALLS relationship between file and function"""
+        with self.driver.session() as session:
+            session.run(
+                """
+                MATCH (f:File {path: $from_file})
+                MATCH (fn:Function {name: $called_function})
+                MERGE (f)-[:CALLS]->(fn)
+                """,
+                from_file=from_file,
+                called_function=called_function
+            )
+    
     def get_dependencies(self, file_path: str) -> List[str]:
         normalized = self._normalize_path(file_path)
         with self.driver.session() as session:
@@ -145,6 +158,96 @@ class GraphDB:
         with self.driver.session() as session:
             result = session.run("MATCH (f:File) RETURN f.path as path ORDER BY f.path")
             return [record["path"] for record in result]
+    
+    def get_all_functions(self) -> List[Dict]:
+        """Get all functions with their file and line info"""
+        with self.driver.session() as session:
+            result = session.run(
+                """
+                MATCH (fn:Function)
+                RETURN fn.name as name, fn.file as file, fn.line as line
+                ORDER BY fn.name
+                """
+            )
+            return [dict(record) for record in result]
+    
+    def get_function_info(self, function_name: str) -> Dict:
+        """Get detailed info about a specific function"""
+        with self.driver.session() as session:
+            result = session.run(
+                """
+                MATCH (fn:Function {name: $name})
+                RETURN fn.name as name, fn.file as file, fn.line as line
+                LIMIT 1
+                """,
+                name=function_name
+            )
+            record = result.single()
+            return dict(record) if record else None
+    
+    def get_function_callers(self, function_name: str) -> List[Dict]:
+        """Get all functions/files that call this function"""
+        with self.driver.session() as session:
+            result = session.run(
+                """
+                MATCH (target:Function {name: $name})
+                MATCH (f:File)-[:CALLS]->(target)
+                RETURN 'file' as caller_name, f.path as caller_file, 0 as line
+                """,
+                name=function_name
+            )
+            return [dict(record) for record in result]
+    
+    def get_graph_data(self, limit: int = 50) -> Dict:
+        """Get nodes and edges for graph visualization"""
+        with self.driver.session() as session:
+            # Get file nodes and their relationships
+            result = session.run(
+                """
+                MATCH (f:File)
+                OPTIONAL MATCH (f)-[r:DEPENDS_ON|IMPORTS]->(target:File)
+                WITH f, COLLECT({target: target.path, type: type(r)}) as relationships
+                RETURN f.path as id, f.path as label, relationships
+                LIMIT $limit
+                """,
+                limit=limit
+            )
+            
+            nodes = []
+            edges = []
+            seen_nodes = set()
+            
+            for record in result:
+                node_id = record['id']
+                if node_id not in seen_nodes:
+                    # Show last 2 path parts for better context
+                    parts = node_id.replace('\\', '/').split('/')
+                    label = '/'.join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+                    nodes.append({
+                        'id': node_id,
+                        'label': label
+                    })
+                    seen_nodes.add(node_id)
+                
+                for rel in record['relationships']:
+                    if rel['target']:
+                        target_id = rel['target']
+                        if target_id not in seen_nodes:
+                            parts = target_id.replace('\\', '/').split('/')
+                            label = '/'.join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+                            nodes.append({
+                                'id': target_id,
+                                'label': label
+                            })
+                            seen_nodes.add(target_id)
+                        
+                        edges.append({
+                            'source': node_id,
+                            'target': target_id,
+                            'type': rel['type']
+                        })
+            
+            return {'nodes': nodes, 'edges': edges}
     
     def _normalize_path(self, path: str) -> str:
         """Normalize path for consistent matching"""

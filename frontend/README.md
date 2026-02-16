@@ -1,70 +1,99 @@
-# Frontend - Coming Soon
+# ARCHITECH Frontend
 
-The frontend is intentionally minimal for the hackathon backend demo.
+React-based frontend for the ARCHITECH Architectural Recovery Platform.
 
-## Why Backend-First?
+## Features
 
-The PS-10 challenge focuses on **architectural recovery logic**, not UI:
-- Pattern detection algorithms
-- Graph-based dependency analysis
-- Hybrid retrieval system
-- Evidence-bound LLM reasoning
+- 🔍 **Repository Analysis** - Analyze GitHub repositories
+- 🎯 **Pattern Detection** - View detected architectural patterns (Layered, MVC, Hexagonal)
+- 📊 **Coupling Analysis** - Visualize coupling metrics and circular dependencies
+- 💥 **Impact Analysis** - Predict blast radius of code changes
+- 🏗️ **Architecture View** - Multi-level explanations (Macro/Meso/Micro)
+- 📈 **Dependency Graph** - Interactive D3.js visualization
 
-The backend API is **fully functional** and can be tested via:
-- cURL commands
-- Postman
-- Python test script
-- Neo4j Browser (for graph visualization)
+## Prerequisites
 
-## Quick Visualization
+- Node.js 16+ and npm
+- Backend server running on `http://localhost:8000`
 
-Use **Neo4j Browser** for interactive graph visualization:
-
-1. Open http://localhost:7474
-2. Login with `neo4j/password`
-3. Run query:
-```cypher
-MATCH (n)-[r]->(m) RETURN n,r,m LIMIT 50
-```
-
-## API Testing
+## Installation
 
 ```bash
-# Test all endpoints
-python test_system.py
-
-# Or manually
-curl http://localhost:8000/patterns
-curl http://localhost:8000/coupling
-curl http://localhost:8000/architecture
-```
-
-## Future Frontend (Optional)
-
-If needed, create React app:
-
-```bash
-npx create-react-app frontend
 cd frontend
-npm install d3 axios
+npm install
 ```
 
-Key components:
-- Architecture diagram (D3.js force graph)
-- Pattern detection dashboard
-- Coupling heatmap
-- Impact analysis visualizer
+## Running the App
 
-## Current Demo Strategy
+```bash
+npm start
+```
 
-**Show judges:**
-1. API responses (JSON)
-2. Neo4j graph visualization
-3. Terminal output
-4. Postman collection
+The app will open at `http://localhost:3000`
 
-This proves the **core intelligence** works without UI complexity.
+## Usage
+
+1. **Analyze Tab**: Enter a GitHub repository URL and click "Analyze"
+2. **Patterns Tab**: View detected architectural patterns with confidence scores
+3. **Coupling Tab**: See high coupling files and circular dependencies
+4. **Impact Tab**: Enter a file path to see its blast radius
+5. **Architecture Tab**: Read AI-generated architecture explanations
+6. **Graph Tab**: Visualize file dependencies interactively
+
+## Tech Stack
+
+- **React 18** - UI framework
+- **D3.js** - Graph visualization
+- **Axios** - HTTP client
+- **Inline CSS** - Minimal styling (no external CSS frameworks)
+
+## API Integration
+
+The frontend connects to the FastAPI backend at `http://localhost:8000`:
+
+- `POST /analyze` - Start repository analysis
+- `GET /patterns` - Get detected patterns
+- `GET /coupling` - Get coupling metrics
+- `POST /impact` - Analyze change impact
+- `GET /architecture` - Get architecture explanation
+- `GET /debug/files` - Get file list for graph
+
+## Build for Production
+
+```bash
+npm run build
+```
+
+Creates optimized production build in `build/` folder.
+
+## Project Structure
+
+```
+frontend/
+├── public/
+│   └── index.html
+├── src/
+│   ├── components/
+│   │   ├── AnalyzeRepo.js
+│   │   ├── PatternDetection.js
+│   │   ├── CouplingAnalysis.js
+│   │   ├── ImpactAnalysis.js
+│   │   ├── ArchitectureView.js
+│   │   └── DependencyGraph.js
+│   ├── services/
+│   │   └── api.js
+│   ├── App.js
+│   └── index.js
+└── package.json
+```
+
+## Notes
+
+- Ensure backend is running before starting frontend
+- CORS is enabled on backend for `localhost:3000`
+- Graph visualization works best with <100 files
+- All styling is inline for minimal dependencies
 
 ---
 
-**Status**: Backend complete ✅ | Frontend optional for future
+**Status**: ✅ Production Ready

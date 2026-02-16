@@ -83,12 +83,71 @@ class AnalysisEngine:
         }
     
     def get_architecture_explanation(self) -> Dict:
-        patterns = self.pattern_detector.detect_patterns() if self.pattern_detector else {}
+        """Generate comprehensive architecture explanation using LLM"""
+        if not self.pattern_detector:
+            return {
+                'macro': 'No analysis completed yet. Please analyze a repository first.',
+                'meso': '',
+                'micro': '',
+                'evidence': []
+            }
+        
+        # Get patterns
+        patterns = self.pattern_detector.detect_patterns()
+        
+        # Get all files and their dependencies from graph
+        all_files = self.graph_db.get_all_files()
+        
+        # Get graph structure data
+        graph_data = self.graph_db.get_graph_data(limit=100)
+        
+        # Build graph context for LLM
+        graph_context = self._build_graph_context(graph_data, all_files)
+        
+        # Retrieve evidence from vector store
+        evidence = self.retrieval_engine.retrieve_evidence(
+            "system architecture patterns modules structure"
+        )
+        
+        # Generate explanations using LLM with graph context
+        macro_explanation = self.llm.explain_architecture(evidence['evidence'])
+        
+        # Generate meso level with graph structure
+        meso_explanation = self.llm.explain_meso_level(patterns, graph_context)
+        
+        # Generate micro level with detailed file analysis
+        micro_explanation = self.llm.explain_micro_level(all_files[:20], graph_data)
+        
         return {
-            'explanation': 'Architecture analysis based on graph structure',
-            'detected_patterns': patterns,
-            'evidence_files': []
+            'macro': macro_explanation.get('explanation', 'Architecture analysis in progress'),
+            'meso': meso_explanation,
+            'micro': micro_explanation,
+            'evidence': evidence['evidence'][:5]
         }
+    
+    def _build_graph_context(self, graph_data: Dict, all_files: List[str]) -> str:
+        """Build textual representation of graph structure"""
+        context_parts = []
+        context_parts.append(f"Total files: {len(all_files)}")
+        context_parts.append(f"Total dependencies: {len(graph_data.get('edges', []))}")
+        
+        # Group files by directory
+        directories = {}
+        for file_path in all_files:
+            parts = file_path.replace('\\', '/').split('/')
+            if len(parts) > 1:
+                dir_name = parts[-2]
+                directories[dir_name] = directories.get(dir_name, 0) + 1
+        
+        context_parts.append("\nDirectory structure:")
+        for dir_name, count in sorted(directories.items(), key=lambda x: x[1], reverse=True)[:10]:
+            context_parts.append(f"  {dir_name}/: {count} files")
+        
+        # Analyze dependency patterns
+        if graph_data.get('edges'):
+            context_parts.append(f"\nDependency relationships: {len(graph_data['edges'])} connections")
+        
+        return '\n'.join(context_parts)
     
     def analyze_change_impact(self, file_path: str) -> Dict:
         resolved_path = self._resolve_path(file_path)
@@ -102,6 +161,40 @@ class AnalysisEngine:
         result['blast_radius'] = blast_radius
         result['risk_level'] = 'high' if len(blast_radius) > 10 else 'medium' if len(blast_radius) > 5 else 'low'
         return result
+    
+    def analyze_function(self, function_name: str) -> Dict:
+        """Analyze function usage, callers, and provide LLM explanation"""
+        # Get function info from graph
+        function_info = self.graph_db.get_function_info(function_name)
+        if not function_info:
+            return {"error": f"Function '{function_name}' not found"}
+        
+        # Get callers (who calls this function)
+        callers = self.graph_db.get_function_callers(function_name)
+        
+        # Get semantic context from vector store
+        search_results = self.vector_store.search(
+            f"function {function_name} implementation usage",
+            n_results=3
+        )
+        
+        # Generate LLM explanation
+        explanation = self.llm.explain_function(
+            function_name,
+            function_info,
+            callers,
+            search_results
+        )
+        
+        return {
+            "function_name": function_name,
+            "file": function_info.get('file'),
+            "line": function_info.get('line'),
+            "callers": callers,
+            "usage_count": len(callers),
+            "explanation": explanation,
+            "related_code": search_results
+        }
     
     def _resolve_path(self, file_path: str) -> str:
         """Convert relative path to absolute path stored in graph"""
@@ -134,6 +227,12 @@ class AnalysisEngine:
             logger.info(f"   📦 Storing {len(imports)} imports for {parsed['file']}")
         for imp in imports:
             self.graph_db.create_import_relationship(parsed['file'], imp)
+        
+        # Store function calls
+        function_calls = parsed.get('function_calls', [])
+        if function_calls:
+            for called_func in set(function_calls):
+                self.graph_db.create_function_call(parsed['file'], called_func)
     
     def _store_in_vector(self, parsed: Dict):
         """Store code in vector database for semantic search"""

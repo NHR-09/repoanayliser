@@ -70,11 +70,29 @@ async def get_blast_radius(file_path: str):
     radius = engine.dependency_mapper.get_blast_radius(resolved)
     return {"file": file_path, "affected_files": radius, "count": len(radius)}
 
+@app.get("/function/{function_name}")
+async def get_function_info(function_name: str):
+    """Get function usage, callers, and LLM explanation"""
+    result = engine.analyze_function(function_name)
+    return result
+
 @app.get("/debug/files")
 async def debug_files():
     """Show all files stored in graph for debugging"""
     files = engine.graph_db.get_all_files()
     return {"total": len(files), "files": files[:20], "repo_path": str(engine.repo_path) if engine.repo_path else None}
+
+@app.get("/graph/data")
+async def get_graph_data():
+    """Get nodes and edges for graph visualization"""
+    graph_data = engine.graph_db.get_graph_data()
+    return graph_data
+
+@app.get("/functions")
+async def list_functions():
+    """List all functions in the codebase"""
+    functions = engine.graph_db.get_all_functions()
+    return {"total": len(functions), "functions": functions}
 
 def run_analysis(job_id: str, repo_url: str):
     try:
