@@ -428,12 +428,42 @@ class AnalysisEngine:
         return arch_explanation
     
     def _compute_arch_stats(self) -> Dict:
-        """Compute structural stats from existing analyzers (no LLM needed)"""
+        """Compute structural stats from existing analyzers (no LLM needed).
+        Falls back to Snapshot node properties when File nodes are missing."""
         all_files = self.graph_db.get_all_files()
         graph_data = self.graph_db.get_graph_data(limit=100)
         coupling_data = self.coupling_analyzer.analyze() if self.coupling_analyzer else {}
         cycles = self.dependency_mapper.detect_cycles() if self.dependency_mapper else []
         patterns = self.pattern_detector.detect_patterns() if self.pattern_detector else {}
+        
+        total_files = len(all_files)
+        total_deps = len(graph_data.get('edges', []))
+        avg_coupling = coupling_data.get('metrics', {}).get('avg_coupling', 0)
+        cycle_count = len(cycles)
+        
+        # Fallback: if no live files found, read from Snapshot node properties
+        if total_files == 0 and self.current_snapshot_id:
+            with self.graph_db.driver.session() as session:
+                result = session.run("""
+                    MATCH (s:Snapshot {snapshot_id: $sid})
+                    RETURN s.total_files as tf, s.total_deps as td,
+                           s.avg_coupling as ac, s.cycle_count as cc,
+                           s.snapshot_files as sf
+                    """, sid=self.current_snapshot_id)
+                rec = result.single()
+                if rec:
+                    total_files = rec['tf'] or 0
+                    total_deps = rec['td'] or 0
+                    avg_coupling = rec['ac'] or 0
+                    cycle_count = rec['cc'] or 0
+                    # Build directories from snapshot_files JSON
+                    if rec['sf']:
+                        import json
+                        try:
+                            sf_list = json.loads(rec['sf'])
+                            all_files = [f.get('path', '') for f in sf_list if f.get('path')]
+                        except:
+                            pass
         
         directories = {}
         for fp in all_files:
@@ -454,10 +484,10 @@ class AnalysisEngine:
                 })
         
         return {
-            'total_files': len(all_files),
-            'total_dependencies': len(graph_data.get('edges', [])),
-            'avg_coupling': round(coupling_data.get('metrics', {}).get('avg_coupling', 0), 2),
-            'cycle_count': len(cycles),
+            'total_files': total_files,
+            'total_dependencies': total_deps,
+            'avg_coupling': round(avg_coupling, 2),
+            'cycle_count': cycle_count,
             'detected_patterns': detected_patterns,
             'top_directories': [{'name': d, 'count': c} for d, c in top_dirs_list]
         }
@@ -626,6 +656,7 @@ class AnalysisEngine:
     
     def _rebuild_from_cache(self, repo_id: str):
         """Rebuild analyzers from cached snapshot data"""
+        import json as json_mod
         with self.graph_db.driver.session() as session:
             # Get files with their imports and dependencies
             result = session.run("""
@@ -657,6 +688,45 @@ class AnalysisEngine:
                 })
                 if deps:
                     deps_map[file_path] = deps
+        
+        # If no live File nodes, try to rebuild from snapshot_files JSON + dependencies
+        if not parsed_files and self.current_snapshot_id:
+            logger.info("📂 No live File nodes — rebuilding from snapshot_files")
+            with self.graph_db.driver.session() as session:
+                result = session.run("""
+                    MATCH (s:Snapshot {snapshot_id: $sid})
+                    RETURN s.snapshot_files as sf, s.dependencies as deps
+                    """, sid=self.current_snapshot_id)
+                rec = result.single()
+                if rec and rec['sf']:
+                    try:
+                        sf_list = json_mod.loads(rec['sf'])
+                        for f_entry in sf_list:
+                            fp = f_entry.get('path', '')
+                            if fp:
+                                # Guess language from extension
+                                ext = fp.rsplit('.', 1)[-1] if '.' in fp else ''
+                                lang = {'py': 'python', 'js': 'javascript', 'java': 'java'}.get(ext, 'python')
+                                parsed_files.append({
+                                    'file': fp,
+                                    'language': lang,
+                                    'imports': [],
+                                    'classes': [],
+                                    'functions': []
+                                })
+                    except Exception as e:
+                        logger.warning(f"Could not parse snapshot_files: {e}")
+                
+                # Rebuild edges from stored dependency string
+                if rec and rec['deps']:
+                    try:
+                        edges = eval(rec['deps'])  # stored as str(list of tuples)
+                        for src, tgt in edges:
+                            if src not in deps_map:
+                                deps_map[src] = []
+                            deps_map[src].append(tgt)
+                    except Exception as e:
+                        logger.warning(f"Could not parse stored dependencies: {e}")
         
         # Rebuild dependency graph with import data
         self.dependency_mapper = DependencyMapper()
