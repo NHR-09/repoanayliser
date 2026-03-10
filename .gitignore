@@ -1,0 +1,94 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+dist/
+build/
+
+# Environment & API Keys
+.env
+*.env
+!.env.example
+.env.local
+.env.*.local
+
+# API Keys & Secrets
+**/GROQ_API_KEY*
+**/OPENAI_API_KEY*
+**/ANTHROPIC_API_KEY*
+**/*_API_KEY*
+**/*_SECRET*
+**/secrets.json
+**/credentials.json
+**/*.pem
+**/*.key
+!**/*.key.example
+
+# Databases
+backend/chroma_db/
+chroma_db/
+*.sqlite3
+*.db
+neo4j/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Workspace
+backend/workspace/
+workspace/
+repos/
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# Test outputs
+test_output/
+*.test
+
+# OS
+.DS_Store
+Thums.db
+
+# Node modules (frontend)
+frontend/node_modules/
+frontend/build/
+frontend/package-lock.json
+node_modules/
+package-lock.json
+
+# Python virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+.pytest_cache/
+
+# Documentation builds
+docs/_build/
+site/
