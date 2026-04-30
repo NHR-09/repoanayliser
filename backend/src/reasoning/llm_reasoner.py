@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, List, Optional
 import os
 from groq import Groq
 from dotenv import load_dotenv
@@ -76,39 +76,77 @@ Provide a detailed micro-level analysis covering:
 Be concise and focus on the most important files."""
         return self._call_llm(prompt)
     
-    def explain_architecture_report(self, patterns_text: str, graph_context: str, top_dirs: str, evidence_text: str) -> Dict:
-        """Single consolidated architecture explanation — replaces 3 separate calls"""
-        prompt = f"""You are analyzing a software repository. Based on the data below, provide a structured architecture report.
+    def explain_architecture_report(
+        self,
+        patterns_text: str,
+        graph_context: str,
+        top_dirs: str,
+        evidence_text: str,
+        graphify_context: Optional[str] = None,
+    ) -> Dict:
+        """Single consolidated architecture explanation — replaces 3 separate calls.
+        
+        If graphify_context is provided (from GraphifyRetriever), it is injected
+        into the prompt so the LLM can cite actual function and class names.
+        """
+        graphify_section = (
+            f"\nStructural Knowledge Graph (functions, classes, call chains):\n{graphify_context}"
+            if graphify_context
+            else ""
+        )
+
+        system_prompt = """You are a senior software architect performing a deep architectural review. Your job is to provide INSIGHTS, not summaries. 
+
+CRITICAL RULES:
+1. Do NOT paraphrase the data back. Do NOT say "File X contains class Y and function Z" — that's useless restating.
+2. Instead, ANALYZE: Why is the system designed this way? What design decisions were made? What are the strengths and weaknesses?
+3. Explain HOW modules interact at a conceptual level: what data flows between them, what role each plays in the overall system.
+4. Identify architectural patterns and EXPLAIN why they matter for maintainability, scalability, and testability.
+5. For Key Files, explain WHY they are critical — what happens if they break? What is their architectural role?
+6. Use specific file, class, and function names as evidence for your observations — but use them to support insights, not as the insight itself.
+7. If a README/project description is provided, use it to understand the system's purpose and domain.
+8. Never use "likely", "probably", "may contain". State what you observe and what it means architecturally."""
+
+        user_prompt = f"""Analyze this repository's architecture. Provide deep architectural insights, not surface-level file listings.
 
 Detected Patterns:
 {patterns_text}
 
-Graph Structure:
+Structural Data:
 {graph_context}
 
 Directory Breakdown:
 {top_dirs}
 
 Code Evidence:
-{evidence_text}
+{evidence_text}{graphify_section}
 
-Respond with EXACTLY these 3 sections using the headers below. Keep each section to 3-5 sentences. Be specific and cite file names.
+Respond with EXACTLY these 3 sections. Each section should be 4-6 sentences of genuine architectural insight.
 
 ## Overview
-(Overall architecture style, main patterns, and system purpose)
+Explain the system's purpose and overall architecture. What problem does it solve? What architectural style does it follow and WHY is that a good/bad fit? What are the major subsystems and how do they relate? Reference detected patterns and explain their implications.
 
 ## Modules
-(Key modules/layers, their responsibilities, and how they interact)
+For each major module/subsystem: What is its responsibility? What design decisions shape it (e.g., separation of concerns, encapsulation)? How do modules communicate — trace a specific data/control flow through the dependency edges. Identify any layering violations or tight coupling between modules that shouldn't be coupled.
 
 ## Key Files
-(Most critical files in the system and why they matter)"""
+Which files are architecturally critical and WHY? Don't just list hub files — explain their architectural ROLE: Are they orchestrators? Data gateways? Service facades? What risk do they pose (single points of failure, God objects)? What happens to the system if they are modified or removed?"""
         
-        response = self._call_llm_with_limit(prompt, max_tokens=1200)
+        response = self.client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.4,
+            max_tokens=2000
+        )
+        response_text = response.choices[0].message.content
         
         # Parse sections from response
         sections = {'overview': '', 'modules': '', 'key_files': ''}
         current = None
-        lines = response.split('\n')
+        lines = response_text.split('\n')
         for line in lines:
             lower = line.lower().strip()
             if '## overview' in lower or '**overview**' in lower:
@@ -129,7 +167,7 @@ Respond with EXACTLY these 3 sections using the headers below. Keep each section
         
         # Fallback if parsing failed
         if not sections['overview'] and not sections['modules']:
-            sections['overview'] = response
+            sections['overview'] = response_text
         
         return sections
     
@@ -177,6 +215,60 @@ Evidence:
 
 Explain what consequences this change may have. Cite specific files."""
     
+    def explain_impact_with_graph(
+        self,
+        file_path: str,
+        change_type: str,
+        direct: List[str],
+        indirect: List[str],
+        functions: List[Dict],
+        risk_level: str,
+        risk_score: int,
+        graphify_file_context: Optional[Dict] = None,
+    ) -> str:
+        """Generate a blast-radius impact explanation enriched with Graphify's
+        knowledge of actual functions and classes inside the changed file."""
+        from pathlib import Path
+
+        filename = Path(file_path).name
+        direct_list = "\n".join([f"  - {Path(f).name}" for f in direct[:10] if f]) or "  None"
+        indirect_list = "\n".join([f"  - {Path(f).name}" for f in indirect[:10] if f]) or "  None"
+        func_list = "\n".join([f"  - {fn['name']} ({fn['caller_count']} callers)" for fn in functions[:10]]) or "  None"
+
+        # Graphify structural enrichment
+        graphify_section = ""
+        if graphify_file_context:
+            gf_funcs = graphify_file_context.get("functions", [])
+            gf_classes = graphify_file_context.get("classes", [])
+            if gf_funcs or gf_classes:
+                graphify_section = "\nKnown symbols in this file (from knowledge graph):"
+                if gf_classes:
+                    graphify_section += f"\n  Classes: {', '.join(gf_classes[:8])}"
+                if gf_funcs:
+                    graphify_section += f"\n  Functions: {', '.join(gf_funcs[:12])}"
+
+        prompt = f"""Analyze the impact of {change_type.upper()}ing file: {filename}
+
+BLAST RADIUS ANALYSIS:
+
+Direct Dependents ({len(direct)} files):
+{direct_list}
+
+Indirect Dependents ({len(indirect)} files):
+{indirect_list}
+
+Functions Affected ({len(functions)} functions):
+{func_list}{graphify_section}
+
+Risk Assessment: {risk_level.upper()} (Score: {risk_score}/100)
+
+Provide a concise 2-3 sentence summary explaining:
+1. What components are directly impacted (cite actual function/class names if available)
+2. The cascading effects on the system
+3. Key risks to consider"""
+
+        return self._call_llm(prompt)
+
     def _build_function_prompt(self, function_name: str, function_info: Dict, callers: List[Dict], context: List[Dict], function_code: str = None) -> str:
         """Build prompt for function explanation"""
         caller_text = "\n".join([

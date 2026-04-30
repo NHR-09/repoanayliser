@@ -45,7 +45,7 @@ export default function CouplingAnalysis({ repoId }) {
   if (!coupling) return (
     <div style={s.container}>
       <div style={s.emptyWrap}>
-        <span style={{ fontSize: '36px', display: 'block', marginBottom: '12px' }}></span>
+        <span style={{ fontSize: '36px', display: 'block', marginBottom: '12px' }}>🔗</span>
         <p style={s.emptyTitle}>No Coupling Data</p>
         <p style={s.emptyHint}>Analyze a repository first to view coupling metrics</p>
       </div>
@@ -94,19 +94,25 @@ export default function CouplingAnalysis({ repoId }) {
 
           {/* Stat Cards */}
           <div style={s.bentoCard}>
-            <div style={s.statIcon}></div>
+            <div style={s.statIcon}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg>
+            </div>
             <div style={s.statValue}>{coupling.metrics.total_files}</div>
             <div style={s.statLabel}>Total Files</div>
           </div>
 
           <div style={s.bentoCard}>
-            <div style={s.statIcon}></div>
+            <div style={s.statIcon}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>
+            </div>
             <div style={s.statValue}>{coupling.metrics.total_dependencies}</div>
             <div style={s.statLabel}>Dependencies</div>
           </div>
 
           <div style={{ ...s.bentoCard, ...(coupling.cycles && coupling.cycles.length > 0 ? { borderColor: 'rgba(248,113,113,0.2)' } : {}) }}>
-            <div style={s.statIcon}>{coupling.cycles && coupling.cycles.length > 0 ? '—' : '—'}</div>
+            <div style={{ ...s.statIcon, color: coupling.cycles && coupling.cycles.length > 0 ? '#f87171' : '#4ade80' }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+            </div>
             <div style={{
               ...s.statValue,
               color: coupling.cycles && coupling.cycles.length > 0 ? '#f87171' : '#4ade80'
@@ -117,7 +123,9 @@ export default function CouplingAnalysis({ repoId }) {
           </div>
 
           <div style={s.bentoCard}>
-            <div style={s.statIcon}></div>
+            <div style={{ ...s.statIcon, color: '#fbbf24' }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>
+            </div>
             <div style={s.statValue}>
               {coupling.high_coupling?.length || 0}
             </div>

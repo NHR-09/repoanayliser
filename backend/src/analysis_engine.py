@@ -12,7 +12,7 @@ from .graph.dependency_mapper import DependencyMapper
 from .graph.analyzers import PatternDetector, CouplingAnalyzer
 from .graph.version_tracker import VersionTracker
 from .graph.blast_radius import BlastRadiusAnalyzer
-from .retrieval.vector_store import VectorStore
+from .retrieval.graphify_retriever import GraphifyRetriever
 from .retrieval.retrieval_engine import RetrievalEngine
 from .reasoning.llm_reasoner import LLMReasoner
 from .config import settings
@@ -32,8 +32,8 @@ class AnalysisEngine:
             settings.neo4j_password
         )
         self.dependency_mapper = DependencyMapper()
-        self.vector_store = VectorStore(settings.chroma_path)
-        self.retrieval_engine = RetrievalEngine(self.vector_store, self.graph_db)
+        self.graphify = GraphifyRetriever()
+        self.retrieval_engine = RetrievalEngine(self.graphify, self.graph_db)
         self.llm = LLMReasoner()
         self.version_tracker = VersionTracker(self.graph_db)
         self.pattern_detector = None
@@ -141,7 +141,32 @@ class AnalysisEngine:
                 return True
             return False
     
+    def analyze_local_path(self, local_path: str) -> Dict:
+        """Analyze a local directory without git cloning."""
+        logger.info(f"\n{'='*60}")
+        logger.info("🚀 Starting local path analysis")
+        logger.info(f"{'='*60}")
+
+        repo_path = self.repo_loader.use_local_path(local_path)
+        self.repo_path = repo_path
+
+        # Use resolved absolute path as the stable identifier
+        abs_path_str = str(repo_path)
+        repo_id = hashlib.sha256(abs_path_str.encode()).hexdigest()[:16]
+
+        # Use git commit if available, else fall back to folder mtime hash
+        commit_info = self.version_tracker.get_current_commit(abs_path_str)
+        if not commit_info:
+            import time
+            mtime = str(int(repo_path.stat().st_mtime))
+            synthetic_hash = hashlib.sha256(f"{abs_path_str}_{mtime}".encode()).hexdigest()
+            commit_info = None  # Non-git: always re-analyse (no caching on mtime)
+            logger.info("⚠️  No git repo detected — skipping cache, running fresh analysis")
+
+        return self._full_analysis(abs_path_str, repo_path, repo_id)
+
     def _full_analysis(self, repo_url: str, repo_path: Path, repo_id: str) -> Dict:
+
         """Perform full analysis with LLM and caching"""
         # Check if snapshot already exists for current commit (prevent duplicates)
         commit_info = self.version_tracker.get_current_commit(str(repo_path))
@@ -247,7 +272,6 @@ class AnalysisEngine:
                 logger.debug(f"   ✓ Unchanged: {file_info['relative_path']} (commit {version_result.get('commit', 'N/A')})")
             
             self._store_in_graph(parsed)
-            self._store_in_vector(parsed)
             
             # Link file to snapshot
             with self.graph_db.driver.session() as session:
@@ -260,9 +284,67 @@ class AnalysisEngine:
                     file_path=file_info['path']
                 )
         
+        # Pass 2: Create function call edges AFTER all nodes exist
+        # This is critical — cross-file callee Function nodes must be created
+        # before we can link caller → callee across files.
+        logger.info(f"\n🔗 Linking function call edges (pass 2)...")
+        edge_count = 0
+        for parsed in parsed_files:
+            f2f = parsed.get('function_to_function_calls', [])
+            fc = parsed.get('function_calls', [])
+            edge_count += len(f2f) + len(set(fc))
+            self._store_edges_in_graph(parsed)
+        logger.info(f"   ✅ Processed {edge_count} potential call edges across {len(parsed_files)} files")
+        
         logger.info("\n🕸️ Building dependency graph...")
         self.dependency_mapper.build_graph(parsed_files)
         
+        # Index repo with Graphify for structural LLM context
+        logger.info("📊 Indexing with Graphify for structural context...")
+        graphify_ok = self.graphify.index_repo(str(repo_path))
+        if graphify_ok:
+            logger.info(f"   ✅ Graphify indexed {len(self.graphify._nodes)} nodes, {len(self.graphify._edges)} edges")
+
+            # --- Supplement dependency_mapper with Graphify's resolved edges ---
+            # Graphify uses full AST import resolution vs. our fuzzy filename matching,
+            # so merging its edges fills gaps (relative imports, package paths, aliases).
+            logger.info("🔗 Merging Graphify dependency edges into graph...")
+            graphify_edges = self.graphify.get_dependency_edges()
+            new_nx_edges = 0
+            new_neo4j_edges = []
+
+            for src, tgt in graphify_edges:
+                # Add to NetworkX only if not already present
+                if not self.dependency_mapper.graph.has_edge(src, tgt):
+                    self.dependency_mapper.graph.add_edge(src, tgt, type="graphify_import")
+                    new_nx_edges += 1
+                    new_neo4j_edges.append((src, tgt))
+
+            # Persist new edges to Neo4j so blast-radius Cypher queries see them
+            if new_neo4j_edges:
+                with self.graph_db.driver.session() as session:
+                    for src, tgt in new_neo4j_edges:
+                        session.run("""
+                            MATCH (a:File)
+                            WHERE a.file_path = $src OR a.path = $src
+                               OR a.path_normalized ENDS WITH $src_fwd
+                            MATCH (b:File)
+                            WHERE b.file_path = $tgt OR b.path = $tgt
+                               OR b.path_normalized ENDS WITH $tgt_fwd
+                            MERGE (a)-[:DEPENDS_ON {source: 'graphify'}]->(b)
+                            """,
+                            src=src,
+                            tgt=tgt,
+                            src_fwd=src.replace("\\", "/").split("/")[-1],
+                            tgt_fwd=tgt.replace("\\", "/").split("/")[-1],
+                        )
+                logger.info(f"   ✅ Added {new_nx_edges} new edges from Graphify "
+                            f"({len(self.dependency_mapper.graph.edges())} total in graph)")
+            else:
+                logger.info("   ✅ No new edges — dependency graph already complete")
+        else:
+            logger.warning("   ⚠️ Graphify unavailable — architecture explanations will use graph topology only")
+
         # Store dependencies in Neo4j
         logger.info("💾 Storing dependencies in Neo4j...")
         self._store_dependencies_in_neo4j()
@@ -271,6 +353,9 @@ class AnalysisEngine:
         logger.info("🔗 Creating transitive function relationships...")
         transitive_count = self.graph_db.create_transitive_function_calls(self.current_repo_id)
         logger.info(f"   ✅ Created {transitive_count} transitive relationships")
+        
+        # Clean up any orphaned nodes (Functions/Classes not connected to a File)
+        self.graph_db.cleanup_orphaned_nodes()
         
         logger.info("🔍 Detecting architectural patterns...")
         self.pattern_detector = PatternDetector(self.dependency_mapper.graph)
@@ -533,10 +618,18 @@ class AnalysisEngine:
         # Build graph context for LLM
         graph_context = self._build_graph_context(graph_data, all_files)
         
-        # Retrieve evidence from vector store
+        # Retrieve evidence from Graphify knowledge graph
         evidence = self.retrieval_engine.retrieve_evidence(
             "system architecture patterns modules structure"
         )
+        
+        # Build Graphify structural context string for LLM
+        graphify_context = None
+        if self.graphify.is_available:
+            arch_nodes = self.graphify.get_context_for_query(
+                "architecture module service class function entry point", top_k=30
+            )
+            graphify_context = self.graphify.format_context_for_llm(arch_nodes)
         
         # Compute structural stats (no LLM tokens needed)
         coupling_data = self.coupling_analyzer.analyze() if self.coupling_analyzer else {}
@@ -566,17 +659,18 @@ class AnalysisEngine:
         # Format patterns for LLM prompt
         patterns_text = self.llm._format_patterns(patterns)
         
-        # Format evidence for LLM prompt (limit to save tokens)
-        evidence_items = evidence.get('evidence', [])[:3]
+        # Format evidence for LLM prompt (more items for richer context)
+        evidence_items = evidence.get('evidence', [])[:5]
         evidence_text = '\n'.join([
-            f"File: {e.get('file', 'unknown')}\n{e.get('code', '')[:200]}"
+            f"File: {e.get('file', 'unknown')}\n{e.get('code', '')[:300]}"
             for e in evidence_items
         ])
         
-        # Single LLM call instead of 3
-        logger.info("🤖 Generating architecture report (single LLM call)...")
+        # Single LLM call — enriched with Graphify structural context
+        logger.info("🤖 Generating architecture report (single LLM call, Graphify-enriched)...")
         sections = self.llm.explain_architecture_report(
-            patterns_text, graph_context, top_dirs_text, evidence_text
+            patterns_text, graph_context, top_dirs_text, evidence_text,
+            graphify_context=graphify_context
         )
         
         stats = {
@@ -804,30 +898,253 @@ class AnalysisEngine:
             return None
     
     def _build_graph_context(self, graph_data: Dict, all_files: List[str]) -> str:
-        """Build textual representation of graph structure"""
-        context_parts = []
-        context_parts.append(f"Total files: {len(all_files)}")
-        context_parts.append(f"Total dependencies: {len(graph_data.get('edges', []))}")
-        
-        # Group files by directory
-        directories = {}
+        """Build a rich textual representation of the graph structure for the LLM.
+
+        Includes project-level context (README), per-file structural summaries
+        (classes, functions, imports), actual dependency edges, hub/leaf analysis,
+        coupling risk scores, cycle paths, and code snippets from critical files.
+        """
+        from pathlib import Path as _Path
+
+        ctx = []
+        edges = graph_data.get('edges', [])
+        ctx.append(f"Total files: {len(all_files)}")
+        ctx.append(f"Total dependency edges: {len(edges)}")
+
+        # --- 0. Project-level context from README ---
+        readme_snippet = self._extract_readme_context()
+        if readme_snippet:
+            ctx.append(f"\n--- Project Description (from README) ---\n{readme_snippet}")
+
+        # --- 1. Per-file structural summary from Neo4j ---
+        file_details: Dict[str, Dict] = {}
+        try:
+            with self.graph_db.driver.session() as session:
+                result = session.run("""
+                    MATCH (f:File)
+                    WHERE f.path IS NOT NULL
+                    OPTIONAL MATCH (f)-[:CONTAINS]->(cls:Class)
+                    OPTIONAL MATCH (f)-[:CONTAINS]->(fn:Function)
+                    OPTIONAL MATCH (f)-[:IMPORTS]->(m:Module)
+                    OPTIONAL MATCH (f)-[:DEPENDS_ON]->(dep:File)
+                    RETURN f.path as path,
+                           COLLECT(DISTINCT cls.name) as classes,
+                           COLLECT(DISTINCT fn.name) as functions,
+                           COLLECT(DISTINCT m.name) as imports,
+                           COLLECT(DISTINCT dep.path) as depends_on
+                """)
+                for r in result:
+                    fp = r['path']
+                    if not fp:
+                        continue
+                    classes = [c for c in r['classes'] if c]
+                    functions = [f for f in r['functions'] if f]
+                    imports = [i for i in r['imports'] if i]
+                    deps = [d for d in r['depends_on'] if d]
+                    file_details[fp] = {
+                        'classes': classes,
+                        'functions': functions,
+                        'imports': imports,
+                        'depends_on': deps,
+                    }
+        except Exception:
+            pass
+
+        # Rank files by structural richness (classes+functions+deps)
+        ranked_files = sorted(
+            file_details.items(),
+            key=lambda kv: len(kv[1]['classes']) + len(kv[1]['functions']) + len(kv[1]['depends_on']),
+            reverse=True,
+        )
+
+        # Helper: abbreviate path to last 2 segments
+        def short(p: str) -> str:
+            parts = p.replace('\\', '/').split('/')
+            return '/'.join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+
+        ctx.append("\n--- Per-File Structure (top 20 by richness) ---")
+        for fp, info in ranked_files[:20]:
+            label = short(fp)
+            parts = []
+            if info['classes']:
+                parts.append(f"Classes: {', '.join(info['classes'][:8])}")
+            if info['functions']:
+                parts.append(f"Functions: {', '.join(info['functions'][:10])}")
+            if info['imports']:
+                parts.append(f"Imports: {', '.join(info['imports'][:8])}")
+            if info['depends_on']:
+                dep_names = [short(d) for d in info['depends_on'][:5]]
+                parts.append(f"Depends on: {', '.join(dep_names)}")
+            if parts:
+                ctx.append(f"\n  {label}")
+                for part in parts:
+                    ctx.append(f"    {part}")
+
+        # --- 2. Actual dependency edges (top 50) ---
+        if edges:
+            ctx.append(f"\n--- Dependency Edges ({len(edges)} total, showing top 50) ---")
+            for edge in edges[:50]:
+                src = short(edge.get('source', ''))
+                tgt = short(edge.get('target', ''))
+                if src and tgt:
+                    ctx.append(f"  {src} → {tgt}")
+
+        # --- 3. Hub / Leaf analysis ---
+        in_degree: Dict[str, int] = {}
+        out_degree: Dict[str, int] = {}
+        for edge in edges:
+            src = edge.get('source', '')
+            tgt = edge.get('target', '')
+            out_degree[src] = out_degree.get(src, 0) + 1
+            in_degree[tgt] = in_degree.get(tgt, 0) + 1
+
+        hubs = sorted(in_degree.items(), key=lambda x: x[1], reverse=True)[:5]
+        fans = sorted(out_degree.items(), key=lambda x: x[1], reverse=True)[:5]
+
+        if hubs:
+            ctx.append("\n--- Hub Files (most depended upon) ---")
+            for fp, deg in hubs:
+                ctx.append(f"  {short(fp)}: {deg} dependents")
+        if fans:
+            ctx.append("\n--- High Fan-Out Files (most dependencies) ---")
+            for fp, deg in fans:
+                ctx.append(f"  {short(fp)}: depends on {deg} files")
+
+        # --- 4. Structural risk scores (from CouplingAnalyzer) ---
+        if self.coupling_analyzer:
+            try:
+                # Use actual CouplingAnalyzer API
+                risk_scores = self.coupling_analyzer.compute_risk_for_all(top_n=5)
+                if risk_scores:
+                    ctx.append("\n--- Structural Risk Scores (top 5) ---")
+                    for rs in risk_scores:
+                        name = short(rs.get('file', '?'))
+                        score = rs.get('score', 0)
+                        level = rs.get('level', 'unknown')
+                        fi = rs.get('fan_in', 0)
+                        fo = rs.get('fan_out', 0)
+                        cyc = " [IN CYCLE]" if rs.get('in_cycle') else ""
+                        ctx.append(f"  {name}: risk={score}/100 ({level}) fan_in={fi} fan_out={fo}{cyc}")
+
+                # Also include high-coupling files
+                coupling_data = self.coupling_analyzer.analyze()
+                high_coupling = coupling_data.get('high_coupling', [])
+                if high_coupling:
+                    ctx.append(f"\n--- High Coupling Files ({len(high_coupling)} files) ---")
+                    for hc in sorted(high_coupling, key=lambda x: x.get('fan_in', 0) + x.get('fan_out', 0), reverse=True)[:5]:
+                        name = short(hc.get('file', '?'))
+                        ctx.append(f"  {name}: fan_in={hc.get('fan_in', 0)} fan_out={hc.get('fan_out', 0)}")
+            except Exception:
+                pass
+
+        # --- 5. Cycles ---
+        if self.dependency_mapper:
+            try:
+                cycles = self.dependency_mapper.detect_cycles()
+                if cycles:
+                    ctx.append(f"\n--- Dependency Cycles ({len(cycles)} detected) ---")
+                    for cycle in cycles[:5]:
+                        path_str = ' → '.join([short(c) for c in cycle])
+                        ctx.append(f"  {path_str}")
+            except Exception:
+                pass
+
+        # --- 6. Code snippets from hub files (docstrings / first lines) ---
+        hub_files = [fp for fp, _ in hubs[:3]] if hubs else []
+        if hub_files:
+            ctx.append("\n--- Code Context from Critical Files ---")
+            for fp in hub_files:
+                snippet = self._extract_file_docstring(fp)
+                if snippet:
+                    ctx.append(f"\n  {short(fp)}:\n    {snippet}")
+
+        # --- 7. Directory breakdown (compact) ---
+        directories: Dict[str, int] = {}
         for file_path in all_files:
-            if not file_path:  # Skip None values
+            if not file_path:
                 continue
             parts = file_path.replace('\\', '/').split('/')
             if len(parts) > 1:
                 dir_name = parts[-2]
                 directories[dir_name] = directories.get(dir_name, 0) + 1
-        
-        context_parts.append("\nDirectory structure:")
+
+        ctx.append("\n--- Directory Breakdown ---")
         for dir_name, count in sorted(directories.items(), key=lambda x: x[1], reverse=True)[:10]:
-            context_parts.append(f"  {dir_name}/: {count} files")
-        
-        # Analyze dependency patterns
-        if graph_data.get('edges'):
-            context_parts.append(f"\nDependency relationships: {len(graph_data['edges'])} connections")
-        
-        return '\n'.join(context_parts)
+            ctx.append(f"  {dir_name}/: {count} files")
+
+        return '\n'.join(ctx)
+
+    def _extract_readme_context(self) -> str:
+        """Extract the first meaningful paragraph from README.md if it exists."""
+        if not self.repo_path:
+            return ""
+        for name in ['README.md', 'readme.md', 'README.rst', 'README.txt', 'README']:
+            readme_path = Path(self.repo_path) / name
+            if readme_path.exists():
+                try:
+                    content = readme_path.read_text(encoding='utf-8', errors='ignore')
+                    # Skip title lines (# heading) and get substantive text
+                    lines = content.split('\n')
+                    substantive = []
+                    for line in lines:
+                        stripped = line.strip()
+                        if not stripped:
+                            if substantive:
+                                break  # Stop at first blank line after content
+                            continue
+                        if stripped.startswith('#'):
+                            # Include headings but keep going
+                            substantive.append(stripped)
+                            continue
+                        substantive.append(stripped)
+                        if len(' '.join(substantive)) > 500:
+                            break
+                    return ' '.join(substantive)[:600]
+                except Exception:
+                    return ""
+        return ""
+
+    def _extract_file_docstring(self, file_path: str) -> str:
+        """Extract the module-level docstring or first comment block from a file."""
+        try:
+            fp = Path(file_path)
+            if not fp.exists():
+                return ""
+            content = fp.read_text(encoding='utf-8', errors='ignore')
+            lines = content.split('\n')
+
+            # Try to find triple-quote docstring
+            if len(lines) > 0:
+                for i, line in enumerate(lines[:10]):
+                    stripped = line.strip()
+                    if stripped.startswith('"""') or stripped.startswith("'''"):
+                        quote = stripped[:3]
+                        if stripped.count(quote) >= 2:
+                            # Single-line docstring
+                            return stripped.strip(quote).strip()[:200]
+                        # Multi-line docstring
+                        doc_lines = [stripped.replace(quote, '').strip()]
+                        for j in range(i + 1, min(i + 8, len(lines))):
+                            if quote in lines[j]:
+                                doc_lines.append(lines[j].strip().replace(quote, '').strip())
+                                break
+                            doc_lines.append(lines[j].strip())
+                        return ' '.join(l for l in doc_lines if l)[:200]
+
+            # Fallback: first comment block
+            comments = []
+            for line in lines[:8]:
+                stripped = line.strip()
+                if stripped.startswith('#'):
+                    comments.append(stripped.lstrip('# ').strip())
+                elif stripped and not stripped.startswith(('import', 'from', 'def', 'class')):
+                    break
+            if comments:
+                return ' '.join(comments)[:200]
+
+            return ""
+        except Exception:
+            return ""
     
     def analyze_change_impact(self, file_path: str, change_type: str = "modify") -> Dict:
         resolved_path = self._resolve_path(file_path)
@@ -869,34 +1186,22 @@ class AnalysisEngine:
         risk_level = result.get('risk_level', 'unknown')
         risk_score = result.get('risk_score', 0)
         
-        # Build LLM prompt with blast radius data
-        filename = Path(file_path).name
-        direct_list = '\n'.join([f"  - {Path(f).name}" for f in direct[:10] if f]) or '  None'
-        indirect_list = '\n'.join([f"  - {Path(f).name}" for f in indirect[:10] if f]) or '  None'
-        func_list = '\n'.join([f"  - {fn['name']} ({fn['caller_count']} callers)" for fn in functions[:10]]) or '  None'
-        
-        prompt = f"""Analyze the impact of {change_type.upper()}ing file: {filename}
-
-BLAST RADIUS ANALYSIS:
-
-Direct Dependents ({len(direct)} files):
-{direct_list}
-
-Indirect Dependents ({len(indirect)} files):
-{indirect_list}
-
-Functions Affected ({len(functions)} functions):
-{func_list}
-
-Risk Assessment: {risk_level.upper()} (Score: {risk_score}/100)
-
-Provide a concise 2-3 sentence summary explaining:
-1. What components are directly impacted
-2. The cascading effects on the system
-3. Key risks to consider"""
-        
         try:
-            explanation = self.llm._call_llm(prompt)
+            # Get Graphify file-level context (actual functions/classes in the file)
+            graphify_file_ctx = None
+            if self.graphify.is_available:
+                graphify_file_ctx = self.graphify.get_path_context(file_path)
+
+            explanation = self.llm.explain_impact_with_graph(
+                file_path=file_path,
+                change_type=change_type,
+                direct=direct,
+                indirect=indirect,
+                functions=functions,
+                risk_level=risk_level,
+                risk_score=risk_score,
+                graphify_file_context=graphify_file_ctx,
+            )
             self.memory_cache[cache_key] = {
                 'explanation': explanation,
                 '_total_affected': result.get('total_affected', 0)
@@ -940,11 +1245,16 @@ Provide a concise 2-3 sentence summary explaining:
                 'line': c.get('line', 0)
             })
         
-        # Get semantic context from vector store
-        search_results = self.vector_store.search(
-            f"function {function_name} implementation usage",
-            n_results=3
-        )
+        # Get structural context from Graphify (replaces ChromaDB vector search)
+        search_results = []
+        if self.graphify.is_available:
+            file_ctx = self.graphify.get_path_context(file_path or "")
+            # Convert to format expected by llm.explain_function
+            for fn_name in file_ctx.get("functions", [])[:3]:
+                search_results.append({
+                    "code": f"function: {fn_name}",
+                    "metadata": {"file_path": file_path or ""},
+                })
         
         # Generate LLM explanation with actual code
         explanation = self.llm.explain_function(
@@ -992,6 +1302,10 @@ Provide a concise 2-3 sentence summary explaining:
         return file_path
     
     def _store_in_graph(self, parsed: Dict):
+        """Pass 1: Store file, class, and function NODES + imports.
+        Call edges are deferred to _store_edges_in_graph (pass 2)
+        so that all Function nodes exist before we try to link them.
+        """
         # Compute file content hash
         import hashlib
         try:
@@ -1023,17 +1337,31 @@ Provide a concise 2-3 sentence summary explaining:
         for imp in imports:
             self.graph_db.create_import_relationship(parsed['file'], imp)
         
-        # Store function calls
+        # Store class method ownership (parent_class on Function nodes)
+        class_methods = parsed.get('class_methods', [])
+        if class_methods:
+            logger.debug(f"   🏛️ Storing {len(class_methods)} class-method ownerships for {Path(parsed['file']).name}")
+            for cm in class_methods:
+                self.graph_db.set_function_parent_class(
+                    parsed['file'], cm['method'], cm['class'], cm['line'],
+                    self.current_repo_id
+                )
+    
+    def _store_edges_in_graph(self, parsed: Dict):
+        """Pass 2: Create function call edges AFTER all nodes exist.
+        This ensures cross-file callee Function nodes are already created.
+        """
+        # Store file-to-function calls
         function_calls = parsed.get('function_calls', [])
         if function_calls:
-            logger.info(f"   📞 Storing {len(set(function_calls))} unique function calls from {Path(parsed['file']).name}")
+            logger.debug(f"   📞 Storing {len(set(function_calls))} unique function calls from {Path(parsed['file']).name}")
             for called_func in set(function_calls):
                 self.graph_db.create_function_call(parsed['file'], called_func, self.current_repo_id)
         
         # Store function-to-function calls
         func_to_func_calls = parsed.get('function_to_function_calls', [])
         if func_to_func_calls:
-            logger.info(f"   🔗 Storing {len(func_to_func_calls)} function-to-function calls")
+            logger.debug(f"   🔗 Storing {len(func_to_func_calls)} function-to-function calls from {Path(parsed['file']).name}")
             for call in func_to_func_calls:
                 self.graph_db.create_function_to_function_call(
                     parsed['file'], 
@@ -1041,21 +1369,33 @@ Provide a concise 2-3 sentence summary explaining:
                     call['callee'], 
                     self.current_repo_id
                 )
+        
+        # OOP Resolution: Resolve self.X.method() calls using attribute type info
+        method_calls = parsed.get('method_calls', [])
+        self_attributes = parsed.get('self_attributes', [])
+        if method_calls and self_attributes:
+            # Build attribute-type lookup: {(class_name, attr_name): type_name}
+            attr_types = {}
+            for sa in self_attributes:
+                attr_types[(sa['class'], sa['attr'])] = sa['type']
+            
+            resolved_count = 0
+            for mc in method_calls:
+                target_type = attr_types.get((mc['caller_class'], mc['target_attr']))
+                if target_type:
+                    self.graph_db.create_resolved_method_call(
+                        parsed['file'],
+                        mc['caller_class'],
+                        mc['caller_method'],
+                        target_type,
+                        mc['target_method'],
+                        self.current_repo_id
+                    )
+                    resolved_count += 1
+            
+            if resolved_count > 0:
+                logger.info(f"   🎯 Resolved {resolved_count}/{len(method_calls)} OOP method calls from {Path(parsed['file']).name}")
     
-    def _store_in_vector(self, parsed: Dict):
-        """Store code in vector database for semantic search"""
-        code_text = self._extract_code_text(parsed)
-        if code_text.strip():
-            self.vector_store.add_code_chunk(
-                chunk_id=parsed['file'],
-                code=code_text,
-                metadata={
-                    'file_path': parsed['file'],
-                    'language': parsed['language'],
-                    'num_classes': len(parsed.get('classes', [])),
-                    'num_functions': len(parsed.get('functions', []))
-                }
-            )
     
     def _extract_code_text(self, parsed: Dict) -> str:
         """Extract meaningful code text for embedding"""
@@ -1126,7 +1466,7 @@ Provide a concise 2-3 sentence summary explaining:
                 OPTIONAL MATCH (f)-[:CONTAINS]->(fn:Function)
                 DETACH DELETE f, c, fn
                 """)
-        self.vector_store.clear()
+        # ChromaDB removed - Graphify handles context indexing
     
     def compare_snapshots(self, repo_id: str, snapshot1: str, snapshot2: str) -> Dict:
         """Compare two snapshots with cached architecture, coupling, and dependencies"""

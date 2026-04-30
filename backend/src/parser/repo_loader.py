@@ -64,6 +64,22 @@ class RepositoryLoader:
         
         return target_path
     
+    def use_local_path(self, local_path: str) -> Path:
+        """Validate and return a local directory path without cloning."""
+        if not local_path:
+            raise ValueError("Local path cannot be empty")
+        
+        path = Path(local_path).resolve()
+        
+        if not path.exists():
+            raise ValueError(f"Path does not exist: {path}")
+        
+        if not path.is_dir():
+            raise ValueError(f"Path is not a directory: {path}")
+        
+        logger.info(f"📁 Using local path: {path}")
+        return path
+    
     def scan_files(self, repo_path: Path, extensions: List[str]) -> List[Dict]:
         logger.info(f"🔍 Scanning repository for files with extensions: {extensions}")
         files = []

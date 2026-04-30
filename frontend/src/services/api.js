@@ -6,6 +6,12 @@ export const api = {
   analyzeRepo: (repoUrl) =>
     axios.post(`${API_BASE}/analyze`, { repo_url: repoUrl }),
 
+  analyzeLocal: (localPath) =>
+    axios.post(`${API_BASE}/analyze/local`, { local_path: localPath }),
+
+  browseFolder: () =>
+    axios.get(`${API_BASE}/browse-folder`),
+
   getStatus: (jobId) =>
     axios.get(`${API_BASE}/status/${jobId}`),
 

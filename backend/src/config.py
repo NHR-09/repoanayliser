@@ -5,8 +5,6 @@ class Settings(BaseSettings):
     neo4j_user: str
     neo4j_password: str
     
-    chroma_path: str
-    
     groq_api_key: str
     
     max_file_size: int = 1000000

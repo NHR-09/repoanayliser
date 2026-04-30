@@ -29,6 +29,31 @@ class GraphDB:
         with self.driver.session() as session:
             session.run("MATCH (n) DETACH DELETE n")
     
+    def cleanup_orphaned_nodes(self):
+        """Delete Function/Class nodes not connected to any File via [:CONTAINS].
+        These are stale leftovers from previous analyses or failed writes.
+        """
+        with self.driver.session() as session:
+            result = session.run("""
+                MATCH (fn:Function)
+                WHERE NOT (:File)-[:CONTAINS]->(fn)
+                DETACH DELETE fn
+                RETURN count(fn) as deleted
+            """)
+            fn_deleted = result.single()['deleted']
+            
+            result = session.run("""
+                MATCH (c:Class)
+                WHERE NOT (:File)-[:CONTAINS]->(c)
+                DETACH DELETE c
+                RETURN count(c) as deleted
+            """)
+            cls_deleted = result.single()['deleted']
+            
+            if fn_deleted > 0 or cls_deleted > 0:
+                logger.info(f"🧹 Cleaned up {fn_deleted} orphaned Functions, {cls_deleted} orphaned Classes")
+            return fn_deleted + cls_deleted
+    
     def create_file_node(self, file_path: str, language: str, content_hash: str = None):
         if not file_path:
             logger.warning("Attempted to create File node with empty path, skipping")
@@ -78,28 +103,94 @@ class GraphDB:
                     """,
                     repo_id=repo_id, file_path=normalized_path
                 )
-                # Then create function and link to file
-                session.run(
+            # Create function ONLY if the parent File exists
+            # Using a single statement ensures no orphaned Function nodes
+            result = session.run(
+                """
+                MATCH (f:File)
+                WHERE f.path = $file_path OR f.file_path = $file_path
+                WITH f LIMIT 1
+                MERGE (fn:Function {name: $name, file: $file_path})
+                SET fn.line = $line, fn.parent_class = $parent_class
+                MERGE (f)-[:CONTAINS]->(fn)
+                RETURN fn.name as created
+                """,
+                file_path=normalized_path, name=func_name, line=line,
+                parent_class=None  # Will be set later via set_function_parent_class
+            )
+            record = result.single()
+            if not record:
+                logger.warning(f"⚠️  Skipped orphan function '{func_name}' — no File node for {normalized_path}")
+    
+    def set_function_parent_class(self, file_path: str, func_name: str, class_name: str, line: int, repo_id: str = None):
+        """Set parent_class property on a Function node.
+        Uses line number for disambiguation when multiple classes have same method name."""
+        normalized = self._normalize_path(file_path)
+        with self.driver.session() as session:
+            session.run(
+                """
+                MATCH (f:File)-[:CONTAINS]->(fn:Function {name: $func_name})
+                WHERE (f.path = $file_path OR f.file_path = $file_path)
+                  AND fn.line = $line
+                SET fn.parent_class = $class_name
+                """,
+                file_path=normalized, func_name=func_name,
+                class_name=class_name, line=line
+            )
+    
+    def create_resolved_method_call(self, from_file: str, caller_class: str, caller_method: str,
+                                     target_class: str, target_method: str, repo_id: str = None):
+        """Create a CALLS edge between two class methods, resolved via self.X attribute types.
+        
+        Example: Kernel.request_seat -> ProcessManager.get_process
+        This creates the edge: (Function{name:request_seat, parent_class:Kernel})
+                              -[:CALLS {source: 'oop_resolution'}]->
+                               (Function{name:get_process, parent_class:ProcessManager})
+        """
+        normalized_from = self._normalize_path(from_file)
+        with self.driver.session() as session:
+            if repo_id:
+                result = session.run(
                     """
-                    MATCH (f:File)
-                    WHERE f.path = $file_path OR f.file_path = $file_path
-                    MERGE (fn:Function {name: $name, file: $file_path})
-                    SET fn.line = $line
-                    MERGE (f)-[:CONTAINS]->(fn)
+                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f1:File)-[:CONTAINS]->(caller:Function)
+                    WHERE (f1.path = $from_file OR f1.file_path = $from_file)
+                      AND caller.name = $caller_method
+                      AND caller.parent_class = $caller_class
+                    MATCH (r)-[:CONTAINS]->(:File)-[:CONTAINS]->(callee:Function)
+                    WHERE callee.name = $target_method
+                      AND callee.parent_class = $target_class
+                    MERGE (caller)-[:CALLS {source: 'oop_resolution'}]->(callee)
+                    RETURN count(callee) as matched
                     """,
-                    file_path=normalized_path, name=func_name, line=line
+                    repo_id=repo_id,
+                    from_file=normalized_from,
+                    caller_class=caller_class,
+                    caller_method=caller_method,
+                    target_class=target_class,
+                    target_method=target_method
                 )
             else:
-                session.run(
+                result = session.run(
                     """
-                    MATCH (f:File)
-                    WHERE f.path = $file_path OR f.file_path = $file_path
-                    MERGE (fn:Function {name: $name, file: $file_path})
-                    SET fn.line = $line
-                    MERGE (f)-[:CONTAINS]->(fn)
+                    MATCH (f1:File)-[:CONTAINS]->(caller:Function)
+                    WHERE (f1.path = $from_file OR f1.file_path = $from_file)
+                      AND caller.name = $caller_method
+                      AND caller.parent_class = $caller_class
+                    MATCH (:File)-[:CONTAINS]->(callee:Function)
+                    WHERE callee.name = $target_method
+                      AND callee.parent_class = $target_class
+                    MERGE (caller)-[:CALLS {source: 'oop_resolution'}]->(callee)
+                    RETURN count(callee) as matched
                     """,
-                    file_path=normalized_path, name=func_name, line=line
+                    from_file=normalized_from,
+                    caller_class=caller_class,
+                    caller_method=caller_method,
+                    target_class=target_class,
+                    target_method=target_method
                 )
+            record = result.single()
+            if record and record['matched'] > 0:
+                logger.debug(f"✓ OOP CALLS: {caller_class}.{caller_method} -> {target_class}.{target_method}")
     
     def create_import_relationship(self, from_file: str, to_module: str):
         # Normalize from_file path for matching
@@ -178,7 +269,9 @@ class GraphDB:
                     logger.debug(f"✓ CALLS: {Path(from_file).name} -> {called_function}")
     
     def create_function_to_function_call(self, from_file: str, caller_func: str, callee_func: str, repo_id: str = None):
-        """Create CALLS relationship between two functions"""
+        """Create CALLS relationship between two functions.
+        Both caller and callee must already exist as nodes connected to a File.
+        """
         normalized_from = self._normalize_path(from_file)
         with self.driver.session() as session:
             if repo_id:
@@ -200,12 +293,14 @@ class GraphDB:
                 if record and record['matched'] > 0:
                     logger.debug(f"✓ {caller_func} -> {callee_func}")
             else:
+                # Non-repo mode: require callee to be contained in SOME file
+                # (prevents creating edges to orphaned/global function nodes)
                 result = session.run(
                     """
                     MATCH (f:File)
                     WHERE f.path = $from_file OR f.file_path = $from_file
                     MATCH (f)-[:CONTAINS]->(caller:Function {name: $caller_func})
-                    MATCH (callee:Function {name: $callee_func})
+                    MATCH (:File)-[:CONTAINS]->(callee:Function {name: $callee_func})
                     MERGE (caller)-[:CALLS]->(callee)
                     RETURN count(callee) as matched
                     """,
