@@ -22,11 +22,11 @@ class RepositoryLoader:
         
         target_path = self.workspace_dir / repo_name
         
-        logger.info(f"🔄 Starting repository clone: {repo_url}")
-        logger.info(f"📁 Target directory: {target_path}")
+        logger.info(f" Starting repository clone: {repo_url}")
+        logger.info(f" Target directory: {target_path}")
         
         if target_path.exists():
-            logger.info(f"⚠️  Directory exists, removing: {target_path}")
+            logger.info(f"  Directory exists, removing: {target_path}")
             import shutil
             import stat
             import time
@@ -47,7 +47,7 @@ class RepositoryLoader:
                 except:
                     pass
         
-        logger.info("📥 Cloning repository (this may take a few minutes)...")
+        logger.info(" Cloning repository (this may take a few minutes)...")
         try:
             result = subprocess.run(
                 ['git', 'clone', '--depth', '1', repo_url, str(target_path)],
@@ -60,7 +60,7 @@ class RepositoryLoader:
                 "Git is not installed or not in PATH. "
                 "Please install Git from https://git-scm.com/download/win and restart your terminal."
             )
-        logger.info(f"✅ Repository cloned successfully to: {target_path}")
+        logger.info(f" Repository cloned successfully to: {target_path}")
         
         return target_path
     
@@ -77,7 +77,7 @@ class RepositoryLoader:
         if not path.is_dir():
             raise ValueError(f"Path is not a directory: {path}")
         
-        logger.info(f"📁 Using local path: {path}")
+        logger.info(f" Using local path: {path}")
         return path
     
     def scan_files(self, repo_path: Path, extensions: List[str]) -> List[Dict]:
@@ -91,7 +91,7 @@ class RepositoryLoader:
                         "relative_path": str(file_path.relative_to(repo_path)),
                         "language": self._detect_language(ext)
                     })
-        logger.info(f"✅ Found {len(files)} files to analyze")
+        logger.info(f" Found {len(files)} files to analyze")
         return files
     
     def _should_include(self, path: Path) -> bool:

@@ -27,25 +27,31 @@ export default function FunctionGraph({ repoId }) {
     setLoading(true);
     try {
       const { data } = await api.getFunctionGraph(repoId);
-      setGraphData(data);
-      renderGraph(data);
+      setGraphData(data || { nodes: [], edges: [] });
     } catch (error) {
       console.error(error);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const loadFunctionCallChain = async (funcName) => {
     setLoading(true);
     try {
       const { data } = await api.getFunctionCallChain(funcName, repoId);
-      setGraphData(data);
-      renderGraph(data);
+      setGraphData(data || { nodes: [], edges: [] });
     } catch (error) {
       console.error(error);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
+
+  useEffect(() => {
+    if (!loading && graphData && graphData.nodes && graphData.nodes.length > 0 && svgRef.current) {
+      renderGraph(graphData);
+    }
+  }, [graphData, loading]);
 
   const handleFunctionSelect = (e) => {
     const funcName = e.target.value;
@@ -58,7 +64,7 @@ export default function FunctionGraph({ repoId }) {
   };
 
   const renderGraph = (data) => {
-    if (!data.nodes || data.nodes.length === 0) return;
+    if (!svgRef.current || !data.nodes || data.nodes.length === 0) return;
 
     const svg = d3.select(svgRef.current);
     svg.selectAll('*').remove();
@@ -66,11 +72,14 @@ export default function FunctionGraph({ repoId }) {
     const width = 900;
     const height = 600;
 
-    svg.attr('width', width).attr('height', height);
+    svg.attr('viewBox', `0 0 ${width} ${height}`).attr('width', '100%').attr('height', height);
     const g = svg.append('g');
 
-    const simulation = d3.forceSimulation(data.nodes)
-      .force('link', d3.forceLink(data.edges).id(d => d.id).distance(150))
+    const nodes = (data.nodes || []).map(d => ({ ...d }));
+    const edges = (data.edges || []).map(d => ({ ...d }));
+
+    const simulation = d3.forceSimulation(nodes)
+      .force('link', d3.forceLink(edges).id(d => d.id).distance(150))
       .force('charge', d3.forceManyBody().strength(-400))
       .force('center', d3.forceCenter(width / 2, height / 2))
       .force('collision', d3.forceCollide().radius(50));
@@ -90,7 +99,7 @@ export default function FunctionGraph({ repoId }) {
 
     const link = g.append('g')
       .selectAll('line')
-      .data(data.edges)
+      .data(edges)
       .enter()
       .append('line')
       .attr('stroke', '#3f3f46')
@@ -100,7 +109,7 @@ export default function FunctionGraph({ repoId }) {
 
     const node = g.append('g')
       .selectAll('circle')
-      .data(data.nodes)
+      .data(nodes)
       .enter()
       .append('circle')
       .attr('r', d => d.type === 'function' ? 9 : 7)
@@ -117,7 +126,7 @@ export default function FunctionGraph({ repoId }) {
 
     const labels = g.append('g')
       .selectAll('text')
-      .data(data.nodes)
+      .data(nodes)
       .enter()
       .append('text')
       .text(d => d.label)
@@ -130,7 +139,7 @@ export default function FunctionGraph({ repoId }) {
 
     // Build adjacency map for quick neighbor lookup
     const neighbors = new Map();
-    data.edges.forEach(e => {
+    edges.forEach(e => {
       const sId = typeof e.source === 'object' ? e.source.id : e.source;
       const tId = typeof e.target === 'object' ? e.target.id : e.target;
       if (!neighbors.has(sId)) neighbors.set(sId, new Set());

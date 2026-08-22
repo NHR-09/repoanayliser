@@ -3,6 +3,7 @@ from typing import Dict, List
 import logging
 import hashlib
 import subprocess
+import sys
 from threading import Lock
 from collections import OrderedDict
 from .parser.repo_loader import RepositoryLoader
@@ -21,6 +22,17 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 MAX_CACHE_SIZE = 100
+
+def _log_progress(current: int, total: int, label: str = "Processing"):
+    """Print a compact progress bar to stdout using carriage return."""
+    pct = current / total if total else 1
+    filled = int(30 * pct)
+    bar = '█' * filled + '░' * (30 - filled)
+    line = f"\r  {label} |{bar}| {current}/{total} ({pct*100:.0f}%)"
+    sys.stdout.write(line)
+    sys.stdout.flush()
+    if current >= total:
+        sys.stdout.write('\n')
 
 class AnalysisEngine:
     def __init__(self):
@@ -48,7 +60,7 @@ class AnalysisEngine:
     
     def analyze_repository(self, repo_url: str) -> Dict:
         logger.info(f"\n{'='*60}")
-        logger.info("🚀 Starting repository analysis")
+        logger.info(" Starting repository analysis")
         logger.info(f"{'='*60}")
         
         repo_path = self.repo_loader.clone_repository(repo_url)
@@ -246,11 +258,11 @@ class AnalysisEngine:
             ['.py', '.js', '.java']
         )
         
-        logger.info(f"\n📝 Parsing {len(files)} files...")
+        logger.info(f"Parsing {len(files)} files...")
         parsed_files = []
+        new_versions = 0
         for i, file_info in enumerate(files, 1):
-            if i % 5 == 1 or i == len(files):
-                logger.info(f"  [{i}/{len(files)}] Parsing: {file_info['relative_path']}")
+            _log_progress(i, len(files), "Parsing")
             parsed = self.parser.parse_file(
                 file_info['path'],
                 file_info['language']
@@ -265,11 +277,8 @@ class AnalysisEngine:
             )
             parsed['version_status'] = version_result['status']
             parsed['file_hash'] = version_result.get('hash', '')
-            
             if version_result['status'] == 'new_version':
-                logger.info(f"   📌 New version: {file_info['relative_path']}")
-            elif version_result['status'] == 'unchanged':
-                logger.debug(f"   ✓ Unchanged: {file_info['relative_path']} (commit {version_result.get('commit', 'N/A')})")
+                new_versions += 1
             
             self._store_in_graph(parsed)
             
@@ -283,44 +292,36 @@ class AnalysisEngine:
                     snapshot_id=self.current_snapshot_id,
                     file_path=file_info['path']
                 )
+        if new_versions:
+            logger.info(f"  {new_versions} file(s) changed since last analysis")
         
         # Pass 2: Create function call edges AFTER all nodes exist
-        # This is critical — cross-file callee Function nodes must be created
-        # before we can link caller → callee across files.
-        logger.info(f"\n🔗 Linking function call edges (pass 2)...")
+        logger.info("Linking call edges...")
         edge_count = 0
-        for parsed in parsed_files:
+        for i, parsed in enumerate(parsed_files, 1):
+            _log_progress(i, len(parsed_files), "Linking")
             f2f = parsed.get('function_to_function_calls', [])
             fc = parsed.get('function_calls', [])
             edge_count += len(f2f) + len(set(fc))
             self._store_edges_in_graph(parsed)
-        logger.info(f"   ✅ Processed {edge_count} potential call edges across {len(parsed_files)} files")
         
-        logger.info("\n🕸️ Building dependency graph...")
+        logger.info("Building dependency graph...")
         self.dependency_mapper.build_graph(parsed_files)
         
         # Index repo with Graphify for structural LLM context
-        logger.info("📊 Indexing with Graphify for structural context...")
         graphify_ok = self.graphify.index_repo(str(repo_path))
         if graphify_ok:
-            logger.info(f"   ✅ Graphify indexed {len(self.graphify._nodes)} nodes, {len(self.graphify._edges)} edges")
-
-            # --- Supplement dependency_mapper with Graphify's resolved edges ---
-            # Graphify uses full AST import resolution vs. our fuzzy filename matching,
-            # so merging its edges fills gaps (relative imports, package paths, aliases).
-            logger.info("🔗 Merging Graphify dependency edges into graph...")
+            # Supplement dependency_mapper with Graphify's resolved edges
             graphify_edges = self.graphify.get_dependency_edges()
             new_nx_edges = 0
             new_neo4j_edges = []
 
             for src, tgt in graphify_edges:
-                # Add to NetworkX only if not already present
                 if not self.dependency_mapper.graph.has_edge(src, tgt):
                     self.dependency_mapper.graph.add_edge(src, tgt, type="graphify_import")
                     new_nx_edges += 1
                     new_neo4j_edges.append((src, tgt))
 
-            # Persist new edges to Neo4j so blast-radius Cypher queries see them
             if new_neo4j_edges:
                 with self.graph_db.driver.session() as session:
                     for src, tgt in new_neo4j_edges:
@@ -335,29 +336,21 @@ class AnalysisEngine:
                             """,
                             src=src,
                             tgt=tgt,
-                            src_fwd=src.replace("\\", "/").split("/")[-1],
-                            tgt_fwd=tgt.replace("\\", "/").split("/")[-1],
+                            src_fwd=Path(src).name,
+                            tgt_fwd=Path(tgt).name,
                         )
-                logger.info(f"   ✅ Added {new_nx_edges} new edges from Graphify "
-                            f"({len(self.dependency_mapper.graph.edges())} total in graph)")
-            else:
-                logger.info("   ✅ No new edges — dependency graph already complete")
         else:
-            logger.warning("   ⚠️ Graphify unavailable — architecture explanations will use graph topology only")
+            logger.warning("Graphify unavailable — using graph topology only")
 
-        # Store dependencies in Neo4j
-        logger.info("💾 Storing dependencies in Neo4j...")
+        # Store dependencies and transitive calls
         self._store_dependencies_in_neo4j()
-        
-        # Create transitive function call relationships
-        logger.info("🔗 Creating transitive function relationships...")
         transitive_count = self.graph_db.create_transitive_function_calls(self.current_repo_id)
-        logger.info(f"   ✅ Created {transitive_count} transitive relationships")
-        
-        # Clean up any orphaned nodes (Functions/Classes not connected to a File)
         self.graph_db.cleanup_orphaned_nodes()
         
-        logger.info("🔍 Detecting architectural patterns...")
+        total_edges = len(self.dependency_mapper.graph.edges())
+        logger.info(f"Graph built: {len(files)} files, {total_edges} edges, {edge_count} call links, {transitive_count} transitive")
+        
+        logger.info("Detecting architectural patterns...")
         self.pattern_detector = PatternDetector(self.dependency_mapper.graph)
         self.coupling_analyzer = CouplingAnalyzer(self.dependency_mapper.graph)
         self.blast_radius_analyzer = BlastRadiusAnalyzer(self.dependency_mapper, self.graph_db)
@@ -404,7 +397,7 @@ class AnalysisEngine:
                 )
         
         # Generate architecture explanation with LLM and cache
-        logger.info("🤖 Generating architecture explanation with LLM...")
+        logger.info("Generating architecture explanation...")
         arch_explanation = self._generate_and_cache_architecture()
         
         # Store everything in snapshot
@@ -414,9 +407,7 @@ class AnalysisEngine:
         # Preserve file list on snapshot node for future comparisons
         self._preserve_snapshot_file_data(self.current_repo_id)
         
-        logger.info(f"\n{'='*60}")
-        logger.info("✅ Analysis completed successfully!")
-        logger.info(f"{'='*60}\n")
+        logger.info(f"Analysis complete: {len(files)} files, {len(patterns)} patterns detected")
         
         return {
             'repo_path': str(repo_path),
@@ -449,7 +440,6 @@ class AnalysisEngine:
                                         k.startswith(f"impact_{old_repo_id}")]
                         for k in stale_keys:
                             del self.memory_cache[k]
-                        logger.info(f"🗑️ Cleared {len(stale_keys)} stale cache entries from repo {old_repo_id[:8]}")
                 
                 self.current_repo_id = repo_id
                 self.repo_path = Path(record['path'])
@@ -485,7 +475,7 @@ class AnalysisEngine:
         cache_key = f"arch_{self.current_repo_id}_{commit_hash}"
         with self.cache_lock:
             if cache_key in self.memory_cache:
-                logger.info("💾 Using in-memory cached architecture")
+                logger.debug("Using in-memory cached architecture")
                 # Move to end (LRU)
                 self.memory_cache.move_to_end(cache_key)
                 return self.memory_cache[cache_key]
@@ -495,7 +485,7 @@ class AnalysisEngine:
             with self.cache_lock:
                 cached = self._get_cached_architecture(self.current_repo_id, commit_hash)
             if cached:
-                logger.info("📦 Using database cached architecture")
+                logger.debug("Using database cached architecture")
                 # Compute stats on-the-fly for cached text data
                 cached['stats'] = self._compute_arch_stats()
                 with self.cache_lock:
@@ -572,7 +562,7 @@ class AnalysisEngine:
         for fp in all_files:
             if not fp:
                 continue
-            parts = fp.replace('\\', '/').split('/')
+            parts = Path(fp).parts
             if len(parts) > 1:
                 directories[parts[-2]] = directories.get(parts[-2], 0) + 1
         top_dirs_list = sorted(directories.items(), key=lambda x: x[1], reverse=True)[:8]
@@ -640,7 +630,7 @@ class AnalysisEngine:
         for fp in all_files:
             if not fp:
                 continue
-            parts = fp.replace('\\', '/').split('/')
+            parts = Path(fp).parts
             if len(parts) > 1:
                 directories[parts[-2]] = directories.get(parts[-2], 0) + 1
         top_dirs_list = sorted(directories.items(), key=lambda x: x[1], reverse=True)[:8]
@@ -959,7 +949,7 @@ class AnalysisEngine:
 
         # Helper: abbreviate path to last 2 segments
         def short(p: str) -> str:
-            parts = p.replace('\\', '/').split('/')
+            parts = Path(p).parts
             return '/'.join(parts[-2:]) if len(parts) >= 2 else parts[-1]
 
         ctx.append("\n--- Per-File Structure (top 20 by richness) ---")
@@ -1063,7 +1053,7 @@ class AnalysisEngine:
         for file_path in all_files:
             if not file_path:
                 continue
-            parts = file_path.replace('\\', '/').split('/')
+            parts = Path(file_path).parts
             if len(parts) > 1:
                 dir_name = parts[-2]
                 directories[dir_name] = directories.get(dir_name, 0) + 1
@@ -1332,8 +1322,6 @@ class AnalysisEngine:
             )
         
         imports = parsed.get('imports', [])
-        if imports:
-            logger.info(f"   📦 Storing {len(imports)} imports for {parsed['file']}")
         for imp in imports:
             self.graph_db.create_import_relationship(parsed['file'], imp)
         
@@ -1394,7 +1382,7 @@ class AnalysisEngine:
                     resolved_count += 1
             
             if resolved_count > 0:
-                logger.info(f"   🎯 Resolved {resolved_count}/{len(method_calls)} OOP method calls from {Path(parsed['file']).name}")
+                logger.debug(f"Resolved {resolved_count}/{len(method_calls)} OOP method calls from {Path(parsed['file']).name}")
     
     
     def _extract_code_text(self, parsed: Dict) -> str:
@@ -1707,9 +1695,9 @@ class AnalysisEngine:
             risk = self.coupling_analyzer.compute_structural_risk(fp)
             if risk['level'] == 'unknown':
                 # Try flexible matching by filename
-                fname = fp.replace('\\', '/').split('/')[-1]
+                fname = Path(fp).name
                 for node in self.coupling_analyzer.graph.nodes():
-                    if node.replace('\\', '/').split('/')[-1] == fname:
+                    if Path(node).name == fname:
                         risk = self.coupling_analyzer.compute_structural_risk(node)
                         if risk['level'] != 'unknown':
                             break
