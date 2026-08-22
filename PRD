@@ -1,0 +1,171 @@
+# Product Requirements Document (PRD)
+
+## Product Name
+
+ARCHITECH - Architectural Recovery and Semantic Synthesis
+
+## Overview
+
+ARCHITECH is a full-stack repository analysis tool that helps developers, reviewers, and engineering teams understand unfamiliar or evolving codebases. It accepts a GitHub repository URL or local project path, performs static analysis, builds dependency and function graphs, detects architectural patterns, computes coupling and blast radius, tracks repository versions, and presents LLM-assisted architecture explanations through a React dashboard.
+
+## Problem Statement
+
+Software teams often inherit or work across repositories without reliable architecture documentation. Understanding dependencies, change impact, coupling risks, important files, and architectural evolution is slow when done manually. ARCHITECH reduces that discovery cost by combining static parsing, graph analysis, version tracking, and natural-language explanations.
+
+## Goals
+
+- Analyze remote GitHub repositories and local folders.
+- Extract source-level structure from Python and JavaScript files.
+- Build file dependency graphs and function call graphs.
+- Detect common architectural patterns with confidence scores.
+- Identify coupling hotspots and circular dependencies.
+- Estimate blast radius for file changes such as modify, delete, or move.
+- Generate human-readable architecture and impact explanations using an LLM.
+- Track repository snapshots, commits, file versions, and architecture changes over time.
+- Provide a browser-based dashboard for exploration and comparison.
+
+## Non-Goals
+
+- Replacing full enterprise architecture documentation.
+- Performing complete semantic correctness verification of code.
+- Supporting every programming language at the same depth.
+- Running production-grade multi-user access control.
+- Performing automated refactoring or code modification.
+- Guaranteeing perfect architectural classification for unconventional projects.
+
+## Target Users
+
+- Developers onboarding to new repositories.
+- Tech leads reviewing architecture quality.
+- Maintainers assessing change impact before edits.
+- Students learning codebase architecture and dependency analysis.
+- Reviewers comparing architectural drift across commits or snapshots.
+
+## Core User Stories
+
+- As a developer, I want to submit a GitHub URL so I can quickly inspect a repository's architecture.
+- As a developer, I want to analyze a local folder so I can inspect work that has not been pushed.
+- As a tech lead, I want architectural pattern detection so I can understand the dominant design style.
+- As a reviewer, I want coupling and cycle metrics so I can identify structural risk.
+- As a maintainer, I want blast radius analysis so I can estimate the impact of changing a file.
+- As a developer, I want function-level analysis so I can understand where important behavior is called.
+- As a team member, I want architecture summaries so I can read a concise explanation instead of manually tracing the whole graph.
+- As a maintainer, I want snapshot and commit comparisons so I can see how the architecture changed over time.
+
+## Functional Requirements
+
+### Repository Analysis
+
+- The system shall accept a GitHub repository URL.
+- The system shall accept a local filesystem path.
+- The system shall clone remote repositories with shallow git clone behavior.
+- The system shall scan supported source files while excluding generated or dependency directories such as `node_modules`, `venv`, `.git`, `dist`, and `build`.
+- The system shall run long analysis tasks in the backend as background jobs.
+- The frontend shall poll job status until analysis completes or fails.
+
+### Static Parsing
+
+- The system shall parse Python and JavaScript source files using Tree-sitter.
+- The system shall extract files, classes, functions, imports, function calls, and function-to-function call relationships.
+- The system may scan Java files for inclusion but does not currently provide deep Java AST extraction.
+
+### Graph Construction
+
+- The system shall persist repository structure in Neo4j.
+- The system shall create graph nodes for repositories, files, classes, functions, modules, snapshots, commits, versions, and users where applicable.
+- The system shall create relationships such as `CONTAINS`, `IMPORTS`, `DEPENDS_ON`, `CALLS`, `HAS_VERSION`, `VERSION_AT`, `HAS_SNAPSHOT`, and `HAS_COMMIT`.
+- The system shall build an in-memory NetworkX directed graph for dependency analysis.
+- The system shall enrich dependency edges with Graphify output when available.
+
+### Architecture Detection
+
+- The system shall detect architectural patterns using graph and naming heuristics.
+- Supported pattern categories shall include layered architecture, MVC, hexagonal, event-driven, pipe-filter, client-server, microkernel, and microservices.
+- Each pattern result shall include a detection flag, confidence score, and supporting evidence where available.
+
+### Coupling And Risk
+
+- The system shall compute fan-in, fan-out, average coupling, high-coupling files, and circular dependency cycles.
+- The system shall compute structural risk for changed files when enough graph data is available.
+- The system shall expose coupling results through the frontend dashboard.
+
+### Blast Radius And Impact
+
+- The system shall support blast radius analysis for modify, delete, and move change types.
+- The system shall identify direct and indirect dependent files.
+- The system shall identify affected functions and callers where available.
+- The system shall compute a risk score and risk level.
+- The system shall generate an LLM-assisted explanation using graph evidence.
+
+### LLM Architecture Explanation
+
+- The system shall use Groq LLM integration to generate architecture explanations.
+- Architecture explanations shall include overview, modules, and key files.
+- LLM prompts shall include graph metrics, detected patterns, directory breakdowns, and retrieved structural evidence.
+- The system shall cache architecture explanations to avoid unnecessary repeated LLM calls for unchanged commits.
+
+### Version Tracking And Snapshots
+
+- The system shall track repository snapshots in Neo4j.
+- The system shall store current commit information when the analyzed path is a git repository.
+- The system shall hash file content using SHA-256 for version tracking.
+- The system shall import git history for analyzed repositories when available.
+- The system shall compare snapshots and commits for file, dependency, coupling, cycle, pattern, and architecture changes.
+
+### Frontend Experience
+
+- The frontend shall provide tabs or views for repository analysis, repository management, patterns, coupling, blast radius, impact analysis, confidence report, architecture view, dependency graph, function analysis, function graph, snapshot comparison, and file version history.
+- The frontend shall use a centralized API client.
+- The frontend shall visualize dependency and function graph data interactively.
+- The frontend shall display loading, success, error, and empty states for analysis workflows.
+
+## Key Screens
+
+- Analyze Repository: URL/local path entry, folder picker, job progress, completion status.
+- Repository Manager: list, load, and delete analyzed repositories.
+- Architecture View: LLM summary, modules, key files, and stats.
+- Pattern Detection: detected patterns with confidence.
+- Coupling Analysis: high-coupling files, cycles, and metrics.
+- Blast Radius: file selector, change type, affected files/functions, risk.
+- Function Analysis: function list, callers, code context, and explanation.
+- Dependency Graph: file dependency visualization.
+- Function Graph: function call visualization.
+- Snapshot Comparison: compare architecture and structural metrics across snapshots.
+- File Version History: file-level change history.
+
+## Success Metrics
+
+- A supported repository can be analyzed end to end from the UI.
+- Analysis results are persisted and can be reloaded from repository history.
+- Cached unchanged repositories avoid duplicate LLM generation.
+- Dependency and function graphs render with meaningful nodes and edges.
+- Blast radius results include affected files and an interpretable risk score.
+- Architecture summaries cite real structural evidence from the analyzed repository.
+
+## Constraints And Assumptions
+
+- Neo4j must be running and reachable at the configured URI.
+- Git must be installed for remote cloning and commit history import.
+- Groq API credentials are required for LLM explanations.
+- Graphify is optional but improves structural retrieval and dependency resolution.
+- Current deep parsing support is focused on Python and JavaScript.
+- Backend job state is currently stored in memory and is not durable across server restarts.
+
+## Risks
+
+- LLM output can be incomplete or unavailable if API credentials, quota, or network access fail.
+- Architecture pattern detection is heuristic and may be wrong for unconventional naming or layout.
+- Large repositories may take significant time to parse, graph, and explain.
+- In-memory job tracking is unsuitable for horizontally scaled production deployment.
+- CORS is currently permissive and should be restricted before production deployment.
+
+## Future Enhancements
+
+- Add first-class Java parser support.
+- Add authentication and multi-user workspace isolation.
+- Persist background jobs in a durable queue.
+- Add incremental analysis for changed files only.
+- Add exportable reports in PDF or Markdown.
+- Add configurable architecture rules and custom pattern detectors.
+- Add CI integration for architectural regression checks.
+
