@@ -1016,37 +1016,41 @@ class AnalysisEngine:
     ) -> Dict:
         """Analyze function usage, callers, and provide LLM explanation"""
         if repo_id and repo_id != self.current_repo_id:
-            if not self.load_repository_analysis(repo_id):
-                return {"error": "Repository not found"}
+            self.load_repository_analysis(repo_id)
 
-        repo_id = repo_id or self.current_repo_id
-        # Check memory cache
-        cache_key = f"func_{repo_id}_{file_path or 'any'}_{function_name}"
+        active_repo_id = repo_id or self.current_repo_id
+        if not active_repo_id:
+            active_repo_id = self.graph_db.find_repo_for_function(function_name, file_path)
+            if active_repo_id:
+                self.current_repo_id = active_repo_id
+
+        # Normalize file key for cache scoping
+        file_key = Path(file_path).as_posix() if file_path else "any"
+        cache_key = f"func_{active_repo_id}_{file_key}_{function_name}"
         if cache_key in self.memory_cache:
             logger.info("💾 Using cached function explanation")
             return self.memory_cache[cache_key]
         
         # Get function info from graph
-        function_info = self.graph_db.get_function_info(
-            function_name, repo_id=repo_id, file_path=file_path
-        )
+        function_info = self.graph_db.get_function_info(function_name, repo_id=active_repo_id, file_path=file_path)
         if not function_info:
             return {"error": f"Function '{function_name}' not found"}
         
         # Read actual function code from file
-        file_path = function_info.get('file')
+        resolved_file_path = function_info.get('file') or file_path
         start_line = function_info.get('line', 1)
-        function_code = self._extract_function_code(file_path, function_name, start_line)
+        function_code = self._extract_function_code(resolved_file_path, function_name, start_line)
         
         # Get callers (who calls this function)
         raw_callers = self.graph_db.get_function_callers(
-            function_name, repo_id=repo_id, file_path=file_path
+            function_name, 
+            repo_id=active_repo_id, 
+            file_path=resolved_file_path
         )
         # Transform to expected frontend format
         callers = []
         for c in raw_callers:
-            caller_path = c.get('file', c.get('caller_file', ''))
-            # Use function-level caller name if available, else derive from file
+            caller_path = c.get('caller_file') or c.get('file', '')
             caller_name = c.get('caller_name') or (Path(caller_path).stem if caller_path else 'unknown')
             callers.append({
                 'caller_name': caller_name,
@@ -1057,12 +1061,12 @@ class AnalysisEngine:
         # Get structural context from Graphify (replaces ChromaDB vector search)
         search_results = []
         if self.graphify.is_available:
-            file_ctx = self.graphify.get_path_context(file_path or "")
+            file_ctx = self.graphify.get_path_context(resolved_file_path or "")
             # Convert to format expected by llm.explain_function
             for fn_name in file_ctx.get("functions", [])[:3]:
                 search_results.append({
                     "code": f"function: {fn_name}",
-                    "metadata": {"file_path": file_path or ""},
+                    "metadata": {"file_path": resolved_file_path or ""},
                 })
         
         # Generate LLM explanation with actual code
@@ -1076,7 +1080,7 @@ class AnalysisEngine:
         
         result = {
             "function_name": function_name,
-            "file": file_path,
+            "file": resolved_file_path,
             "line": start_line,
             "code": function_code,
             "callers": callers,
@@ -1177,7 +1181,8 @@ class AnalysisEngine:
                     call['caller'], 
                     call['callee'], 
                     self.current_repo_id,
-                    caller_class=call.get('caller_class')
+                    caller_class=call.get('caller_class'),
+                    line=call.get('line')
                 )
     
     

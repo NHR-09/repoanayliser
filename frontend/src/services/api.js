@@ -45,7 +45,7 @@ export const api = {
   getFiles: (repoId) =>
     axios.get(`${API_BASE}/files`, { params: repoId ? { repo_id: repoId } : {} }),
 
-  getFunctionInfo: (functionName, repoId, filePath) =>
+  getFunctionInfo: (functionName, repoId = null, filePath = null) =>
     axios.get(`${API_BASE}/function/${encodeURIComponent(functionName)}`, {
       params: {
         ...(repoId ? { repo_id: repoId } : {}),

@@ -1,5 +1,5 @@
 from neo4j import GraphDatabase
-from typing import Dict, List
+from typing import Dict, List, Optional, Any
 from pathlib import Path
 import logging
 
@@ -336,7 +336,7 @@ class GraphDB:
                 if record and record['matched'] > 0:
                     logger.debug(f"✓ CALLS: {Path(from_file).name} -> {called_function}")
     
-    def create_function_to_function_call(self, from_file: str, caller_func: str, callee_func: str, repo_id: str = None, caller_class: str = None):
+    def create_function_to_function_call(self, from_file: str, caller_func: str, callee_func: str, repo_id: str = None, caller_class: str = None, line: int = None):
         """Create CALLS relationship between two functions.
         Prioritizes callee resolution in order:
         1. Same file (local function)
@@ -360,14 +360,16 @@ class GraphDB:
                     WITH caller, COALESCE(same_callee, dep_callee, repo_callee) AS chosen_callee
                     WHERE chosen_callee IS NOT NULL
                     WITH caller, head(collect(DISTINCT chosen_callee)) AS target_callee
-                    MERGE (caller)-[:CALLS]->(target_callee)
+                    MERGE (caller)-[rel:CALLS]->(target_callee)
+                    SET rel.line = COALESCE($line, caller.line, 0)
                     RETURN count(target_callee) as matched
                     """,
                     repo_id=repo_id,
                     from_file=normalized_from,
                     caller_func=caller_func,
                     callee_func=callee_func,
-                    caller_class=caller_class
+                    caller_class=caller_class,
+                    line=line
                 )
                 record = result.single()
                 if record and record['matched'] > 0:
@@ -387,13 +389,15 @@ class GraphDB:
                     WITH caller, COALESCE(same_callee, dep_callee, repo_callee) AS chosen_callee
                     WHERE chosen_callee IS NOT NULL
                     WITH caller, head(collect(DISTINCT chosen_callee)) AS target_callee
-                    MERGE (caller)-[:CALLS]->(target_callee)
+                    MERGE (caller)-[rel:CALLS]->(target_callee)
+                    SET rel.line = COALESCE($line, caller.line, 0)
                     RETURN count(target_callee) as matched
                     """,
                     from_file=normalized_from,
                     caller_func=caller_func,
                     callee_func=callee_func,
-                    caller_class=caller_class
+                    caller_class=caller_class,
+                    line=line
                 )
                 record = result.single()
                 if record and record['matched'] > 0:
@@ -779,125 +783,212 @@ class GraphDB:
                 )
             return [dict(record) for record in result]
     
-    def get_function_info(
-        self, function_name: str, repo_id: str = None, file_path: str = None
-    ) -> Dict:
-        """Get one function, scoped by repository and file when available."""
+    def find_repo_for_function(self, function_name: str, file_path: str = None) -> Optional[str]:
+        """Auto-detect repo_id for a function by name and optional file_path"""
+        norm_file = self._normalize_path(file_path) if file_path else None
+        suffix_bs = ('\\' + Path(file_path).name) if file_path else ''
+        suffix_fs = ('/' + Path(file_path).name) if file_path else ''
         with self.driver.session() as session:
+            result = session.run(
+                """
+                MATCH (r:Repository)-[:CONTAINS]->(f:File)-[:CONTAINS]->(fn:Function {name: $name})
+                WHERE ($file_path IS NULL 
+                       OR f.path = $file_path 
+                       OR f.file_path = $file_path 
+                       OR f.path ENDS WITH $suffix_bs 
+                       OR f.file_path ENDS WITH $suffix_bs
+                       OR f.path_normalized ENDS WITH $suffix_fs)
+                RETURN r.repo_id as repo_id
+                LIMIT 1
+                """,
+                name=function_name,
+                file_path=norm_file,
+                suffix_bs=suffix_bs,
+                suffix_fs=suffix_fs
+            )
+            record = result.single()
+            return record['repo_id'] if record else None
+
+    def get_function_info(self, function_name: str, repo_id: str = None, file_path: str = None) -> Dict:
+        """Get detailed info about a specific function, scoped by repository and file if given"""
+        norm_file = self._normalize_path(file_path) if file_path else None
+        suffix_bs = ('\\' + Path(file_path).name) if file_path else ''
+        suffix_fs = ('/' + Path(file_path).name) if file_path else ''
+        
+        with self.driver.session() as session:
+            # If repo_id not given, try to detect it
+            if not repo_id and file_path:
+                repo_id = self.find_repo_for_function(function_name, file_path)
+
             if repo_id:
                 result = session.run(
                     """
                     MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f:File)-[:CONTAINS]->(fn:Function {name: $name})
-                    WHERE $file_path IS NULL
-                       OR fn.file = $file_path
-                       OR f.path = $file_path
-                       OR f.file_path = $file_path
-                    RETURN fn.name as name,
-                           COALESCE(fn.file, f.file_path, f.path) as file,
-                           fn.line as line
-                    ORDER BY file, line
+                    WHERE ($file_path IS NULL 
+                           OR f.path = $file_path 
+                           OR f.file_path = $file_path 
+                           OR f.path ENDS WITH $suffix_bs 
+                           OR f.file_path ENDS WITH $suffix_bs
+                           OR f.path_normalized ENDS WITH $suffix_fs)
+                    RETURN fn.name as name, COALESCE(fn.file, f.file_path, f.path) as file, fn.line as line
                     LIMIT 1
                     """,
                     repo_id=repo_id,
                     name=function_name,
-                    file_path=file_path
+                    file_path=norm_file,
+                    suffix_bs=suffix_bs,
+                    suffix_fs=suffix_fs
                 )
             else:
                 result = session.run(
                     """
                     MATCH (f:File)-[:CONTAINS]->(fn:Function {name: $name})
-                    WHERE $file_path IS NULL
-                       OR fn.file = $file_path
-                       OR f.path = $file_path
-                       OR f.file_path = $file_path
-                    RETURN fn.name as name,
-                           COALESCE(fn.file, f.file_path, f.path) as file,
-                           fn.line as line
-                    ORDER BY file, line
+                    WHERE ($file_path IS NULL 
+                           OR f.path = $file_path 
+                           OR f.file_path = $file_path 
+                           OR f.path ENDS WITH $suffix_bs 
+                           OR f.file_path ENDS WITH $suffix_bs
+                           OR f.path_normalized ENDS WITH $suffix_fs)
+                    RETURN fn.name as name, COALESCE(fn.file, f.file_path, f.path) as file, fn.line as line
                     LIMIT 1
                     """,
                     name=function_name,
-                    file_path=file_path
+                    file_path=norm_file,
+                    suffix_bs=suffix_bs,
+                    suffix_fs=suffix_fs
                 )
             record = result.single()
             return dict(record) if record else None
-    
-    def get_function_callers(
-        self, function_name: str, repo_id: str = None, file_path: str = None
-    ) -> List[Dict]:
+
+    def get_function_callers(self, function_name: str, repo_id: str = None, file_path: str = None) -> List[Dict]:
         """Get all files and functions that call this function"""
+        norm_file = self._normalize_path(file_path) if file_path else None
+        suffix_bs = ('\\' + Path(file_path).name) if file_path else ''
+        suffix_fs = ('/' + Path(file_path).name) if file_path else ''
+
+        # Auto-detect repo_id if missing but file_path exists in a known repo
+        if not repo_id and file_path:
+            repo_id = self.find_repo_for_function(function_name, file_path)
+
         with self.driver.session() as session:
+            func_callers = []
+            file_callers = []
+
             if repo_id:
-                # Get file-level callers
-                file_result = session.run(
+                # 1. Function-to-function callers within repository
+                func_result = session.run(
                     """
-                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(target_file:File)-[:CONTAINS]->(fn:Function {name: $name})
-                    WHERE $file_path IS NULL OR fn.file = $file_path
-                       OR target_file.path = $file_path OR target_file.file_path = $file_path
-                    MATCH (r)-[:CONTAINS]->(caller:File)-[:CALLS]->(fn)
-                    RETURN DISTINCT caller.path as file
+                    MATCH (callee_file:File)-[:CONTAINS]->(fn:Function {name: $name})
+                    WHERE ($file_path IS NULL 
+                           OR callee_file.path = $file_path 
+                           OR callee_file.file_path = $file_path 
+                           OR callee_file.path ENDS WITH $suffix_bs 
+                           OR callee_file.file_path ENDS WITH $suffix_bs
+                           OR callee_file.path_normalized ENDS WITH $suffix_fs)
+                      AND EXISTS { MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(callee_file) }
+                    MATCH (caller_file:File)-[:CONTAINS]->(caller:Function)-[rel:CALLS]->(fn)
+                    WHERE EXISTS { MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(caller_file) }
+                    RETURN DISTINCT 
+                        COALESCE(caller_file.file_path, caller_file.path) as file, 
+                        caller.name as caller_name, 
+                        COALESCE(rel.line, caller.line, 0) as line
                     """,
                     repo_id=repo_id,
                     name=function_name,
-                    file_path=file_path
+                    file_path=norm_file,
+                    suffix_bs=suffix_bs,
+                    suffix_fs=suffix_fs
                 )
-                file_callers = [dict(record) for record in file_result]
-                
-                # Also get function-to-function callers
-                func_result = session.run(
+                )
+                func_callers = [dict(record) for record in func_result]
+
+                # 2. File-to-function callers within repository
+                file_result = session.run(
                     """
-                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(target_file:File)-[:CONTAINS]->(fn:Function {name: $name})
-                    WHERE $file_path IS NULL OR fn.file = $file_path
-                       OR target_file.path = $file_path OR target_file.file_path = $file_path
-                    MATCH (r)-[:CONTAINS]->(f:File)-[:CONTAINS]->(caller:Function)-[:CALLS]->(fn)
-                    RETURN DISTINCT f.path as file, caller.name as caller_name, caller.line as line
+                    MATCH (callee_file:File)-[:CONTAINS]->(fn:Function {name: $name})
+                    WHERE ($file_path IS NULL 
+                           OR callee_file.path = $file_path 
+                           OR callee_file.file_path = $file_path 
+                           OR callee_file.path ENDS WITH $suffix_bs 
+                           OR callee_file.file_path ENDS WITH $suffix_bs
+                           OR callee_file.path_normalized ENDS WITH $suffix_fs)
+                      AND EXISTS { MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(callee_file) }
+                    MATCH (caller_file:File)-[rel:CALLS]->(fn)
+                    WHERE EXISTS { MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(caller_file) }
+                    RETURN DISTINCT 
+                        COALESCE(caller_file.file_path, caller_file.path) as file,
+                        COALESCE(rel.line, 0) as line
                     """,
                     repo_id=repo_id,
                     name=function_name,
-                    file_path=file_path
-                )
-                func_callers = [dict(record) for record in func_result]
-            else:
-                file_result = session.run(
-                    """
-                    MATCH (target_file:File)-[:CONTAINS]->(fn:Function {name: $name})
-                    WHERE $file_path IS NULL OR fn.file = $file_path
-                       OR target_file.path = $file_path OR target_file.file_path = $file_path
-                    MATCH (caller:File)-[:CALLS]->(fn)
-                    RETURN DISTINCT caller.path as file
-                    """,
-                    name=function_name,
-                    file_path=file_path
+                    file_path=norm_file,
+                    suffix_bs=suffix_bs,
+                    suffix_fs=suffix_fs
                 )
                 file_callers = [dict(record) for record in file_result]
-                
+
+            # Fallback if no callers found with repo_id filter or if repo_id wasn't provided:
+            if not func_callers and not file_callers:
                 func_result = session.run(
                     """
-                    MATCH (target_file:File)-[:CONTAINS]->(fn:Function {name: $name})
-                    WHERE $file_path IS NULL OR fn.file = $file_path
-                       OR target_file.path = $file_path OR target_file.file_path = $file_path
-                    MATCH (f:File)-[:CONTAINS]->(caller:Function)-[:CALLS]->(fn)
-                    RETURN DISTINCT f.path as file, caller.name as caller_name, caller.line as line
+                    MATCH (callee_file:File)-[:CONTAINS]->(fn:Function {name: $name})
+                    WHERE ($file_path IS NULL 
+                           OR callee_file.path = $file_path 
+                           OR callee_file.file_path = $file_path 
+                           OR callee_file.path ENDS WITH $suffix_bs 
+                           OR callee_file.file_path ENDS WITH $suffix_bs
+                           OR callee_file.path_normalized ENDS WITH $suffix_fs)
+                    MATCH (caller_file:File)-[:CONTAINS]->(caller:Function)-[rel:CALLS]->(fn)
+                    RETURN DISTINCT 
+                        COALESCE(caller_file.file_path, caller_file.path) as file, 
+                        caller.name as caller_name, 
+                        COALESCE(rel.line, caller.line, 0) as line
                     """,
                     name=function_name,
-                    file_path=file_path
+                    file_path=norm_file,
+                    suffix_bs=suffix_bs,
+                    suffix_fs=suffix_fs
                 )
                 func_callers = [dict(record) for record in func_result]
-            
-            # Merge results: function-level callers are more specific
-            # Deduplicate by file path, preferring function-level info
-            seen_files = set()
+
+                file_result = session.run(
+                    """
+                    MATCH (callee_file:File)-[:CONTAINS]->(fn:Function {name: $name})
+                    WHERE ($file_path IS NULL 
+                           OR callee_file.path = $file_path 
+                           OR callee_file.file_path = $file_path 
+                           OR callee_file.path ENDS WITH $suffix_bs 
+                           OR callee_file.file_path ENDS WITH $suffix_bs
+                           OR callee_file.path_normalized ENDS WITH $suffix_fs)
+                    MATCH (caller_file:File)-[rel:CALLS]->(fn)
+                    RETURN DISTINCT 
+                        COALESCE(caller_file.file_path, caller_file.path) as file,
+                        COALESCE(rel.line, 0) as line
+                    """,
+                    name=function_name,
+                    file_path=norm_file,
+                    suffix_bs=suffix_bs,
+                    suffix_fs=suffix_fs
+                )
+                file_callers = [dict(record) for record in file_result]
+
+            # Merge results: function-level callers are prioritized
+            seen_entries = set()
             merged = []
             for fc in func_callers:
-                key = (fc.get('file', ''), fc.get('caller_name', ''))
-                if key not in seen_files:
-                    seen_files.add(key)
+                f_path = fc.get('file') or ''
+                c_name = fc.get('caller_name') or ''
+                key = (f_path, c_name)
+                if key not in seen_entries:
+                    seen_entries.add(key)
                     merged.append(fc)
+
             for fc in file_callers:
-                file_key = fc.get('file', '')
-                if not any(file_key == m.get('file', '') for m in merged):
+                file_key = fc.get('file') or ''
+                if not any(m.get('file') == file_key for m in merged):
+                    fc['caller_name'] = f"(module) {Path(file_key).name if file_key else 'unknown'}"
                     merged.append(fc)
-            
+
             return merged
     
     def get_graph_data(self, repo_id: str = None) -> Dict:

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { api } from '../services/api';
 import MarkdownContent from './MarkdownContent';
 import SearchableTreeSelect from './SearchableTreeSelect';
+import { formatFilePath } from '../utils/formatters';
 
 const functionValue = (fn) => `${fn.file || ''}::${fn.name}::${fn.line || 0}`;
 
@@ -70,17 +71,27 @@ export default function FunctionAnalysis({ repoId }) {
 
           <div style={styles.section}>
             <span style={styles.label}>Location</span>
-            <span style={styles.locationValue}>{functionInfo.file} : {functionInfo.line}</span>
+            <span style={styles.locationValue} title={functionInfo.file}>
+              {formatFilePath(functionInfo.file, 3) || functionInfo.file} : {functionInfo.line}
+            </span>
           </div>
 
           <div style={styles.section}>
             <h4 style={styles.sectionTitle}>Called By ({functionInfo.usage_count} locations)</h4>
-            {functionInfo.callers?.length > 0 ? functionInfo.callers.map((caller, idx) => (
-              <div key={`${caller.caller_file}-${caller.caller_name}-${idx}`} style={styles.caller}>
-                <strong style={{ color: 'var(--text-primary)' }}>{caller.caller_name}</strong>
-                <span style={styles.callerLocation}> in {caller.caller_file}{caller.line > 0 && ` :${caller.line}`}</span>
-              </div>
-            )) : <p style={styles.noData}>No callers found</p>}
+            {functionInfo.callers?.length > 0 ? (
+              functionInfo.callers.map((caller, idx) => (
+                <div key={`${caller.caller_file}-${caller.caller_name}-${idx}`} style={styles.caller}>
+                  <strong style={{ color: 'var(--text-primary)' }}>{caller.caller_name}</strong>
+                  <span style={styles.callerLocation} title={caller.caller_file}>
+                    {' in '}
+                    {formatFilePath(caller.caller_file, 2) || caller.caller_file}
+                    {caller.line > 0 && ` :${caller.line}`}
+                  </span>
+                </div>
+              ))
+            ) : (
+              <p style={styles.noData}>No callers found</p>
+            )}
           </div>
 
           <div style={styles.section}>

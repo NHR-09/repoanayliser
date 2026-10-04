@@ -147,6 +147,30 @@ class StaticParser:
                             _walk(ch, current_class=current_class)
                     return
 
+            # JavaScript route handlers: app.get('/path', ...), router.post(...)
+            if curr.type == 'call_expression':
+                func_n = curr.child_by_field_name('function')
+                args_n = curr.child_by_field_name('arguments')
+                if func_n and args_n and func_n.type == 'member_expression':
+                    method_prop = func_n.child_by_field_name('property')
+                    method_name = self._get_node_text(method_prop, code) if method_prop else ''
+                    if method_name in ('get', 'post', 'put', 'delete', 'patch'):
+                        args = [ch for ch in args_n.children if ch.type not in (',', '(', ')')]
+                        if args and args[0].type == 'string':
+                            route_path = self._get_node_text(args[0], code).strip('"\'`')
+                            fn_name = f"app.{method_name}('{route_path}')"
+                            functions.append({
+                                'name': fn_name,
+                                'line': curr.start_point[0] + 1,
+                                'parent_class': current_class
+                            })
+                            for arg in args[1:]:
+                                if arg.type in ('arrow_function', 'function_expression'):
+                                    body = arg.child_by_field_name('body') or arg
+                                    for ch in body.children:
+                                        _walk(ch, current_class=current_class)
+                            return
+
             for ch in curr.children:
                 _walk(ch, current_class)
 
@@ -228,32 +252,43 @@ class StaticParser:
     def _extract_function_to_function_calls(self, node, code, language) -> List[Dict]:
         """Extract which functions call which other functions, respecting scope boundaries."""
         results = []
-        func_types = {'function_definition', 'function_declaration', 'arrow_function', 'function_expression', 'method_definition'}
 
         def _get_scoped_calls(scope_node):
-            """Get function calls made directly within scope_node, stopping at nested function boundaries."""
+            """Get function calls made directly within scope_node, stopping only at named nested function boundaries."""
             scoped_calls = []
             
             def _walk_calls(curr):
-                if curr != scope_node and curr.type in func_types:
-                    return  # Do not cross into nested function scopes
+                # Only avoid crossing into explicitly named nested functions/methods.
+                # Anonymous closures / callbacks (.map, .forEach, .then) belong to this caller scope.
+                if curr != scope_node:
+                    if curr.type in ('function_definition', 'function_declaration', 'method_definition'):
+                        return
+                    if curr.type == 'variable_declarator':
+                        val = curr.child_by_field_name('value')
+                        if val and val.type in ('arrow_function', 'function_expression'):
+                            return
+                    if curr.type == 'pair':
+                        val = curr.child_by_field_name('value')
+                        if val and val.type in ('arrow_function', 'function_expression'):
+                            return
                 
+                line_no = curr.start_point[0] + 1
                 if language == 'python' and curr.type == 'call':
                     func_n = curr.child_by_field_name('function')
                     if func_n:
                         if func_n.type == 'identifier':
-                            scoped_calls.append(self._get_node_text(func_n, code))
+                            scoped_calls.append((self._get_node_text(func_n, code), line_no))
                         elif func_n.type == 'attribute':
-                            scoped_calls.append(self._get_node_text(func_n, code).split('.')[-1])
+                            scoped_calls.append((self._get_node_text(func_n, code).split('.')[-1], line_no))
                 elif language in self.JS_LANGUAGES and curr.type == 'call_expression':
                     func_n = curr.child_by_field_name('function')
                     if func_n:
                         if func_n.type == 'identifier':
-                            scoped_calls.append(self._get_node_text(func_n, code))
+                            scoped_calls.append((self._get_node_text(func_n, code), line_no))
                         elif func_n.type == 'member_expression':
                             prop = func_n.child_by_field_name('property')
                             if prop:
-                                scoped_calls.append(self._get_node_text(prop, code))
+                                scoped_calls.append((self._get_node_text(prop, code), line_no))
                 
                 for ch in curr.children:
                     _walk_calls(ch)
@@ -293,17 +328,37 @@ class StaticParser:
                 if val and val.type in ('arrow_function', 'function_expression'):
                     fn_name = self._get_node_text(curr.child_by_field_name('key'), code)
                     fn_body = val.child_by_field_name('body') or val
+            elif curr.type == 'call_expression':
+                func_n = curr.child_by_field_name('function')
+                args_n = curr.child_by_field_name('arguments')
+                if func_n and args_n and func_n.type == 'member_expression':
+                    method_prop = func_n.child_by_field_name('property')
+                    method_name = self._get_node_text(method_prop, code) if method_prop else ''
+                    if method_name in ('get', 'post', 'put', 'delete', 'patch'):
+                        args = [ch for ch in args_n.children if ch.type not in (',', '(', ')')]
+                        if args and args[0].type == 'string':
+                            route_path = self._get_node_text(args[0], code).strip('"\'`')
+                            fn_name = f"app.{method_name}('{route_path}')"
+                            for arg in args[1:]:
+                                if arg.type in ('arrow_function', 'function_expression'):
+                                    fn_body = arg.child_by_field_name('body') or arg
+                                    break
 
             if fn_name and fn_body:
                 calls = _get_scoped_calls(fn_body)
-                for callee in set(calls):
-                    call = {
+                callee_lines = {}
+                for callee, line in calls:
+                    if callee not in callee_lines:
+                        callee_lines[callee] = line
+                for callee, line in callee_lines.items():
+                    call_entry = {
                         'caller': fn_name,
-                        'callee': callee
+                        'callee': callee,
+                        'line': line
                     }
                     if current_class:
-                        call['caller_class'] = current_class
-                    results.append(call)
+                        call_entry['caller_class'] = current_class
+                    results.append(call_entry)
                 # Recurse for nested functions inside body
                 for ch in fn_body.children:
                     _walk_tree(ch, current_class=current_class)
