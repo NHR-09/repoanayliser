@@ -6,6 +6,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 class GraphDB:
+    BULK_BATCH_SIZE = 2000
+
     def __init__(self, uri: str, user: str, password: str):
         logger.info(f"🔌 Attempting to connect to Neo4j at {uri}")
         logger.info(f"   User: {user}")
@@ -28,6 +30,31 @@ class GraphDB:
     def clear_database(self):
         with self.driver.session() as session:
             session.run("MATCH (n) DETACH DELETE n")
+    
+    def cleanup_orphaned_nodes(self):
+        """Delete Function/Class nodes not connected to any File via [:CONTAINS].
+        These are stale leftovers from previous analyses or failed writes.
+        """
+        with self.driver.session() as session:
+            result = session.run("""
+                MATCH (fn:Function)
+                WHERE NOT (:File)-[:CONTAINS]->(fn)
+                DETACH DELETE fn
+                RETURN count(fn) as deleted
+            """)
+            fn_deleted = result.single()['deleted']
+            
+            result = session.run("""
+                MATCH (c:Class)
+                WHERE NOT (:File)-[:CONTAINS]->(c)
+                DETACH DELETE c
+                RETURN count(c) as deleted
+            """)
+            cls_deleted = result.single()['deleted']
+            
+            if fn_deleted > 0 or cls_deleted > 0:
+                logger.info(f"🧹 Cleaned up {fn_deleted} orphaned Functions, {cls_deleted} orphaned Classes")
+            return fn_deleted + cls_deleted
     
     def create_file_node(self, file_path: str, language: str, content_hash: str = None):
         if not file_path:
@@ -78,28 +105,23 @@ class GraphDB:
                     """,
                     repo_id=repo_id, file_path=normalized_path
                 )
-                # Then create function and link to file
-                session.run(
-                    """
-                    MATCH (f:File)
-                    WHERE f.path = $file_path OR f.file_path = $file_path
-                    MERGE (fn:Function {name: $name, file: $file_path})
-                    SET fn.line = $line
-                    MERGE (f)-[:CONTAINS]->(fn)
-                    """,
-                    file_path=normalized_path, name=func_name, line=line
-                )
-            else:
-                session.run(
-                    """
-                    MATCH (f:File)
-                    WHERE f.path = $file_path OR f.file_path = $file_path
-                    MERGE (fn:Function {name: $name, file: $file_path})
-                    SET fn.line = $line
-                    MERGE (f)-[:CONTAINS]->(fn)
-                    """,
-                    file_path=normalized_path, name=func_name, line=line
-                )
+            # Create function ONLY if the parent File exists
+            # Using a single statement ensures no orphaned Function nodes
+            result = session.run(
+                """
+                MATCH (f:File)
+                WHERE f.path = $file_path OR f.file_path = $file_path
+                WITH f LIMIT 1
+                MERGE (fn:Function {name: $name, file: $file_path})
+                SET fn.line = $line
+                MERGE (f)-[:CONTAINS]->(fn)
+                RETURN fn.name as created
+                """,
+                file_path=normalized_path, name=func_name, line=line
+            )
+            record = result.single()
+            if not record:
+                logger.warning(f"⚠️  Skipped orphan function '{func_name}' — no File node for {normalized_path}")
     
     def create_import_relationship(self, from_file: str, to_module: str):
         # Normalize from_file path for matching
@@ -178,7 +200,9 @@ class GraphDB:
                     logger.debug(f"✓ CALLS: {Path(from_file).name} -> {called_function}")
     
     def create_function_to_function_call(self, from_file: str, caller_func: str, callee_func: str, repo_id: str = None):
-        """Create CALLS relationship between two functions"""
+        """Create CALLS relationship between two functions.
+        Both caller and callee must already exist as nodes connected to a File.
+        """
         normalized_from = self._normalize_path(from_file)
         with self.driver.session() as session:
             if repo_id:
@@ -200,12 +224,14 @@ class GraphDB:
                 if record and record['matched'] > 0:
                     logger.debug(f"✓ {caller_func} -> {callee_func}")
             else:
+                # Non-repo mode: require callee to be contained in SOME file
+                # (prevents creating edges to orphaned/global function nodes)
                 result = session.run(
                     """
                     MATCH (f:File)
                     WHERE f.path = $from_file OR f.file_path = $from_file
                     MATCH (f)-[:CONTAINS]->(caller:Function {name: $caller_func})
-                    MATCH (callee:Function {name: $callee_func})
+                    MATCH (:File)-[:CONTAINS]->(callee:Function {name: $callee_func})
                     MERGE (caller)-[:CALLS]->(callee)
                     RETURN count(callee) as matched
                     """,
@@ -217,6 +243,156 @@ class GraphDB:
                 if record and record['matched'] > 0:
                     logger.debug(f"✓ {caller_func} -> {callee_func}")
     
+    @staticmethod
+    def _chunks(items: List[Dict], size: int):
+        """Yield bounded parameter batches so very large repositories stay safe."""
+        for start in range(0, len(items), size):
+            yield items[start:start + size]
+
+    def bulk_store_analysis(self, parsed_files: List[Dict], repo_id: str,
+                            snapshot_id: str, batch_size: int = None) -> Dict[str, int]:
+        """Persist a complete parse with a fixed number of Aura round trips."""
+        batch_size = batch_size or self.BULK_BATCH_SIZE
+        files, classes, functions, imports = [], [], [], []
+        file_calls, function_calls = [], []
+
+        for parsed in parsed_files:
+            if not parsed or not parsed.get('file'):
+                continue
+            file_path = self._normalize_path(parsed['file'])
+            files.append({
+                'path': file_path,
+                'path_normalized': file_path.replace('\\', '/'),
+                'language': parsed.get('language', 'unknown'),
+                'hash': parsed.get('file_hash')
+            })
+            classes.extend({
+                'file': file_path, 'name': item['name'], 'line': item.get('line', 0)
+            } for item in parsed.get('classes', []) if item.get('name'))
+            functions.extend({
+                'file': file_path, 'name': item['name'], 'line': item.get('line', 0)
+            } for item in parsed.get('functions', []) if item.get('name'))
+            imports.extend({
+                'file': file_path, 'module': module
+            } for module in set(parsed.get('imports', [])) if module)
+            file_calls.extend({
+                'file': file_path, 'callee': callee
+            } for callee in set(parsed.get('function_calls', [])) if callee)
+            function_calls.extend({
+                'file': file_path,
+                'caller': call.get('caller'),
+                'callee': call.get('callee')
+            } for call in parsed.get('function_to_function_calls', [])
+              if call.get('caller') and call.get('callee'))
+
+        queries = [
+            (files, """
+                MATCH (r:Repository {repo_id: $repo_id})
+                MATCH (s:Snapshot {snapshot_id: $snapshot_id})
+                UNWIND $rows AS item
+                MERGE (f:File {path: item.path})
+                SET f.file_path = item.path,
+                    f.language = item.language,
+                    f.content_hash = item.hash,
+                    f.path_normalized = item.path_normalized
+                MERGE (r)-[:CONTAINS]->(f)
+                MERGE (s)-[:ANALYZED_FILE]->(f)
+            """),
+            (classes, """
+                UNWIND $rows AS item
+                MATCH (f:File {path: item.file})
+                MERGE (c:Class {name: item.name, file: item.file})
+                SET c.line = item.line
+                MERGE (f)-[:CONTAINS]->(c)
+            """),
+            (functions, """
+                UNWIND $rows AS item
+                MATCH (f:File {path: item.file})
+                MERGE (fn:Function {name: item.name, file: item.file})
+                SET fn.line = item.line
+                MERGE (f)-[:CONTAINS]->(fn)
+            """),
+            (imports, """
+                UNWIND $rows AS item
+                MATCH (f:File {path: item.file})
+                MERGE (m:Module {name: item.module})
+                MERGE (f)-[:IMPORTS]->(m)
+            """),
+            (file_calls, """
+                MATCH (r:Repository {repo_id: $repo_id})
+                UNWIND $rows AS item
+                MATCH (r)-[:CONTAINS]->(source:File {path: item.file})
+                MATCH (r)-[:CONTAINS]->(:File)-[:CONTAINS]->(callee:Function {name: item.callee})
+                MERGE (source)-[:CALLS]->(callee)
+            """),
+            (function_calls, """
+                MATCH (r:Repository {repo_id: $repo_id})
+                UNWIND $rows AS item
+                MATCH (r)-[:CONTAINS]->(source:File {path: item.file})
+                MATCH (source)-[:CONTAINS]->(caller:Function {name: item.caller})
+                MATCH (r)-[:CONTAINS]->(:File)-[:CONTAINS]->(callee:Function {name: item.callee})
+                MERGE (caller)-[:CALLS]->(callee)
+            """)
+        ]
+
+        def write_all(tx):
+            for rows, query in queries:
+                for chunk in self._chunks(rows, batch_size):
+                    tx.run(query, rows=chunk, repo_id=repo_id,
+                           snapshot_id=snapshot_id).consume()
+
+        with self.driver.session() as session:
+            session.execute_write(write_all)
+
+        return {
+            'files': len(files), 'classes': len(classes),
+            'functions': len(functions), 'imports': len(imports),
+            'file_calls': len(file_calls), 'function_calls': len(function_calls)
+        }
+
+    def bulk_create_dependencies(self, edges, source: str = None,
+                                 batch_size: int = None) -> int:
+        """Create file dependency edges with batched UNWIND queries."""
+        batch_size = batch_size or self.BULK_BATCH_SIZE
+        rows, seen = [], set()
+        for edge_source, edge_target in edges:
+            normalized_source = self._normalize_path(edge_source)
+            normalized_target = self._normalize_path(edge_target)
+            key = (normalized_source, normalized_target)
+            if key in seen or normalized_source == normalized_target:
+                continue
+            seen.add(key)
+            rows.append({
+                'source': normalized_source,
+                'target': normalized_target,
+                'source_name': Path(edge_source).name,
+                'target_name': Path(edge_target).name,
+                'source_tag': source
+            })
+
+        query = """
+            UNWIND $rows AS item
+            MATCH (f1:File)
+            WHERE f1.path = item.source OR f1.file_path = item.source
+               OR f1.path ENDS WITH '\\\\' + item.source_name
+               OR f1.path ENDS WITH '/' + item.source_name
+            WITH item, f1
+            MATCH (f2:File)
+            WHERE f2.path = item.target OR f2.file_path = item.target
+               OR f2.path ENDS WITH '\\\\' + item.target_name
+               OR f2.path ENDS WITH '/' + item.target_name
+            WITH item, f1, f2
+            WHERE f1 <> f2
+            MERGE (f1)-[rel:DEPENDS_ON]->(f2)
+            FOREACH (_ IN CASE WHEN item.source_tag IS NOT NULL THEN [1] ELSE [] END |
+                SET rel.source = item.source_tag
+            )
+        """
+        with self.driver.session() as session:
+            for chunk in self._chunks(rows, batch_size):
+                session.run(query, rows=chunk).consume()
+        return len(rows)
+
     def create_transitive_function_calls(self, repo_id: str = None):
         """Create transitive CALLS_TRANSITIVE relationships for function call chains"""
         with self.driver.session() as session:
@@ -347,65 +523,108 @@ class GraphDB:
                 )
             return [dict(record) for record in result]
     
-    def get_function_info(self, function_name: str) -> Dict:
-        """Get detailed info about a specific function"""
+    def get_function_info(
+        self, function_name: str, repo_id: str = None, file_path: str = None
+    ) -> Dict:
+        """Get one function, scoped by repository and file when available."""
         with self.driver.session() as session:
-            result = session.run(
-                """
-                MATCH (fn:Function {name: $name})
-                RETURN fn.name as name, fn.file as file, fn.line as line
-                LIMIT 1
-                """,
-                name=function_name
-            )
+            if repo_id:
+                result = session.run(
+                    """
+                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f:File)-[:CONTAINS]->(fn:Function {name: $name})
+                    WHERE $file_path IS NULL
+                       OR fn.file = $file_path
+                       OR f.path = $file_path
+                       OR f.file_path = $file_path
+                    RETURN fn.name as name,
+                           COALESCE(fn.file, f.file_path, f.path) as file,
+                           fn.line as line
+                    ORDER BY file, line
+                    LIMIT 1
+                    """,
+                    repo_id=repo_id,
+                    name=function_name,
+                    file_path=file_path
+                )
+            else:
+                result = session.run(
+                    """
+                    MATCH (f:File)-[:CONTAINS]->(fn:Function {name: $name})
+                    WHERE $file_path IS NULL
+                       OR fn.file = $file_path
+                       OR f.path = $file_path
+                       OR f.file_path = $file_path
+                    RETURN fn.name as name,
+                           COALESCE(fn.file, f.file_path, f.path) as file,
+                           fn.line as line
+                    ORDER BY file, line
+                    LIMIT 1
+                    """,
+                    name=function_name,
+                    file_path=file_path
+                )
             record = result.single()
             return dict(record) if record else None
     
-    def get_function_callers(self, function_name: str, repo_id: str = None) -> List[Dict]:
+    def get_function_callers(
+        self, function_name: str, repo_id: str = None, file_path: str = None
+    ) -> List[Dict]:
         """Get all files and functions that call this function"""
         with self.driver.session() as session:
             if repo_id:
                 # Get file-level callers
                 file_result = session.run(
                     """
-                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(:File)-[:CONTAINS]->(fn:Function {name: $name})
+                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(target_file:File)-[:CONTAINS]->(fn:Function {name: $name})
+                    WHERE $file_path IS NULL OR fn.file = $file_path
+                       OR target_file.path = $file_path OR target_file.file_path = $file_path
                     MATCH (r)-[:CONTAINS]->(caller:File)-[:CALLS]->(fn)
                     RETURN DISTINCT caller.path as file
                     """,
                     repo_id=repo_id,
-                    name=function_name
+                    name=function_name,
+                    file_path=file_path
                 )
                 file_callers = [dict(record) for record in file_result]
                 
                 # Also get function-to-function callers
                 func_result = session.run(
                     """
-                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(:File)-[:CONTAINS]->(fn:Function {name: $name})
+                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(target_file:File)-[:CONTAINS]->(fn:Function {name: $name})
+                    WHERE $file_path IS NULL OR fn.file = $file_path
+                       OR target_file.path = $file_path OR target_file.file_path = $file_path
                     MATCH (r)-[:CONTAINS]->(f:File)-[:CONTAINS]->(caller:Function)-[:CALLS]->(fn)
                     RETURN DISTINCT f.path as file, caller.name as caller_name, caller.line as line
                     """,
                     repo_id=repo_id,
-                    name=function_name
+                    name=function_name,
+                    file_path=file_path
                 )
                 func_callers = [dict(record) for record in func_result]
             else:
                 file_result = session.run(
                     """
-                    MATCH (fn:Function {name: $name})
+                    MATCH (target_file:File)-[:CONTAINS]->(fn:Function {name: $name})
+                    WHERE $file_path IS NULL OR fn.file = $file_path
+                       OR target_file.path = $file_path OR target_file.file_path = $file_path
                     MATCH (caller:File)-[:CALLS]->(fn)
                     RETURN DISTINCT caller.path as file
                     """,
-                    name=function_name
+                    name=function_name,
+                    file_path=file_path
                 )
                 file_callers = [dict(record) for record in file_result]
                 
                 func_result = session.run(
                     """
-                    MATCH (fn:Function {name: $name})
+                    MATCH (target_file:File)-[:CONTAINS]->(fn:Function {name: $name})
+                    WHERE $file_path IS NULL OR fn.file = $file_path
+                       OR target_file.path = $file_path OR target_file.file_path = $file_path
                     MATCH (f:File)-[:CONTAINS]->(caller:Function)-[:CALLS]->(fn)
                     RETURN DISTINCT f.path as file, caller.name as caller_name, caller.line as line
                     """,
-                    name=function_name
+                    name=function_name,
+                    file_path=file_path
                 )
                 func_callers = [dict(record) for record in func_result]
             

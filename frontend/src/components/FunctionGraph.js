@@ -1,6 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as d3 from 'd3';
 import { api } from '../services/api';
+import SearchableTreeSelect from './SearchableTreeSelect';
+
+const functionValue = (fn) => `${fn.file || ''}::${fn.name}::${fn.line || 0}`;
 
 export default function FunctionGraph({ repoId }) {
   const svgRef = useRef();
@@ -13,6 +16,11 @@ export default function FunctionGraph({ repoId }) {
     loadFunctions();
     loadFunctionGraph();
   }, [repoId]);
+
+  useEffect(() => {
+    if (!loading && svgRef.current) return renderGraph(graphData);
+    return undefined;
+  }, [graphData, loading]);
 
   const loadFunctions = async () => {
     try {
@@ -28,49 +36,53 @@ export default function FunctionGraph({ repoId }) {
     try {
       const { data } = await api.getFunctionGraph(repoId);
       setGraphData(data);
-      renderGraph(data);
     } catch (error) {
       console.error(error);
     }
     setLoading(false);
   };
 
-  const loadFunctionCallChain = async (funcName) => {
+  const loadFunctionCallChain = async (fn) => {
     setLoading(true);
     try {
-      const { data } = await api.getFunctionCallChain(funcName, repoId);
+      const { data } = await api.getFunctionCallChain(fn.name, repoId, fn.file);
       setGraphData(data);
-      renderGraph(data);
     } catch (error) {
       console.error(error);
     }
     setLoading(false);
   };
 
-  const handleFunctionSelect = (e) => {
-    const funcName = e.target.value;
-    setSelectedFunction(funcName);
-    if (funcName) {
-      loadFunctionCallChain(funcName);
+  const handleFunctionSelect = (nextValue) => {
+    setSelectedFunction(nextValue);
+    const selected = functions.find(fn => functionValue(fn) === nextValue);
+    if (selected) {
+      loadFunctionCallChain(selected);
     } else {
       loadFunctionGraph();
     }
   };
 
   const renderGraph = (data) => {
-    if (!data.nodes || data.nodes.length === 0) return;
-
     const svg = d3.select(svgRef.current);
     svg.selectAll('*').remove();
+    if (!data.nodes || data.nodes.length === 0) return undefined;
 
     const width = 900;
     const height = 600;
 
-    svg.attr('width', width).attr('height', height);
+    const graphNodes = data.nodes.map(node => ({ ...node }));
+    const graphEdges = data.edges.map(edge => ({
+      ...edge,
+      source: typeof edge.source === 'object' ? edge.source.id : edge.source,
+      target: typeof edge.target === 'object' ? edge.target.id : edge.target
+    }));
+
+    svg.attr('viewBox', `0 0 ${width} ${height}`).attr('height', height);
     const g = svg.append('g');
 
-    const simulation = d3.forceSimulation(data.nodes)
-      .force('link', d3.forceLink(data.edges).id(d => d.id).distance(150))
+    const simulation = d3.forceSimulation(graphNodes)
+      .force('link', d3.forceLink(graphEdges).id(d => d.id).distance(graphNodes.length <= 3 ? 190 : 150))
       .force('charge', d3.forceManyBody().strength(-400))
       .force('center', d3.forceCenter(width / 2, height / 2))
       .force('collision', d3.forceCollide().radius(50));
@@ -90,7 +102,7 @@ export default function FunctionGraph({ repoId }) {
 
     const link = g.append('g')
       .selectAll('line')
-      .data(data.edges)
+      .data(graphEdges)
       .enter()
       .append('line')
       .attr('stroke', '#3f3f46')
@@ -100,11 +112,11 @@ export default function FunctionGraph({ repoId }) {
 
     const node = g.append('g')
       .selectAll('circle')
-      .data(data.nodes)
+      .data(graphNodes)
       .enter()
       .append('circle')
-      .attr('r', d => d.type === 'function' ? 9 : 7)
-      .attr('fill', d => d.type === 'function' ? '#fbbf24' : '#a1a1aa')
+      .attr('r', d => d.focus ? 13 : d.type === 'function' ? 9 : 7)
+      .attr('fill', d => d.focus ? '#60a5fa' : d.type === 'function' ? '#fbbf24' : '#a1a1aa')
       .attr('stroke', d => d.type === 'function' ? '#92400e' : '#52525b')
       .attr('stroke-width', 1.5)
       .call(d3.drag()
@@ -117,7 +129,7 @@ export default function FunctionGraph({ repoId }) {
 
     const labels = g.append('g')
       .selectAll('text')
-      .data(data.nodes)
+      .data(graphNodes)
       .enter()
       .append('text')
       .text(d => d.label)
@@ -130,7 +142,7 @@ export default function FunctionGraph({ repoId }) {
 
     // Build adjacency map for quick neighbor lookup
     const neighbors = new Map();
-    data.edges.forEach(e => {
+    graphEdges.forEach(e => {
       const sId = typeof e.source === 'object' ? e.source.id : e.source;
       const tId = typeof e.target === 'object' ? e.target.id : e.target;
       if (!neighbors.has(sId)) neighbors.set(sId, new Set());
@@ -206,7 +218,7 @@ export default function FunctionGraph({ repoId }) {
       .on('zoom', (event) => { g.attr('transform', event.transform); });
     svg.call(zoom);
 
-    setTimeout(() => {
+    const fitTimer = setTimeout(() => {
       try {
         const bounds = g.node().getBBox();
         const fullWidth = bounds.width;
@@ -214,7 +226,7 @@ export default function FunctionGraph({ repoId }) {
         const midX = bounds.x + fullWidth / 2;
         const midY = bounds.y + fullHeight / 2;
         if (fullWidth > 0 && fullHeight > 0) {
-          const scale = 0.8 / Math.max(fullWidth / width, fullHeight / height);
+          const scale = Math.min(2, 0.8 / Math.max(fullWidth / width, fullHeight / height));
           const translate = [width / 2 - scale * midX, height / 2 - scale * midY];
           svg.transition().duration(750).call(
             zoom.transform,
@@ -236,7 +248,19 @@ export default function FunctionGraph({ repoId }) {
     function dragStarted(event, d) { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; }
     function dragged(event, d) { d.fx = event.x; d.fy = event.y; }
     function dragEnded(event, d) { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; }
+
+    return () => {
+      clearTimeout(fitTimer);
+      simulation.stop();
+    };
   };
+
+  const functionItems = useMemo(() => functions.map(fn => ({
+    value: functionValue(fn),
+    label: fn.name,
+    path: fn.file || 'unknown',
+    secondary: fn.line ? `L${fn.line}` : ''
+  })), [functions]);
 
   if (loading) {
     return (
@@ -253,14 +277,17 @@ export default function FunctionGraph({ repoId }) {
     <div style={styles.container}>
       <div style={styles.header}>
         <h2 style={styles.heading}>Function Call Graph</h2>
-        <select value={selectedFunction} onChange={handleFunctionSelect} style={styles.select}>
-          <option value="">All Functions</option>
-          {functions.map(fn => (
-            <option key={fn.name} value={fn.name}>
-              {fn.name} ({fn.file?.split(/[/\\]/).pop()})
-            </option>
-          ))}
-        </select>
+        <div style={styles.selectorWrap}>
+          <SearchableTreeSelect
+            items={functionItems}
+            value={selectedFunction}
+            onChange={handleFunctionSelect}
+            placeholder="All Functions"
+            searchPlaceholder="Search functions or file paths…"
+            groupByFile
+            emptyOption="All Functions"
+          />
+        </div>
       </div>
       <div style={styles.legend}>
         <span style={styles.legendItem}>
@@ -293,7 +320,7 @@ const styles = {
   container: { padding: '28px', background: 'var(--bg-card)', borderRadius: 'var(--radius-lg)', border: '1px solid var(--border)', marginBottom: '20px' },
   header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' },
   heading: { margin: 0, fontSize: '18px', fontWeight: 600, color: 'var(--text-primary)' },
-  select: { padding: '8px 14px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border)', background: 'var(--bg-input)', color: 'var(--text-primary)', fontSize: '13px', minWidth: '250px' },
+  selectorWrap: { width: '420px', maxWidth: '60%' },
   legend: { display: 'flex', gap: '16px', marginBottom: '12px', fontSize: '12px', color: 'var(--text-muted)' },
   legendItem: { display: 'flex', alignItems: 'center', gap: '6px' },
   legendDot: { width: '10px', height: '10px', borderRadius: '50%', display: 'inline-block' },

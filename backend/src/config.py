@@ -5,12 +5,10 @@ class Settings(BaseSettings):
     neo4j_user: str
     neo4j_password: str
     
-    chroma_path: str
-    
     groq_api_key: str
     
     max_file_size: int = 1000000
-    supported_languages: list = ["python", "javascript", "java"]
+    supported_languages: list = ["python", "javascript", "typescript", "tsx", "java"]
     
     class Config:
         env_file = ".env"

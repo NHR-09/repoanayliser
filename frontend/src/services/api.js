@@ -6,6 +6,12 @@ export const api = {
   analyzeRepo: (repoUrl) =>
     axios.post(`${API_BASE}/analyze`, { repo_url: repoUrl }),
 
+  analyzeLocal: (localPath) =>
+    axios.post(`${API_BASE}/analyze/local`, { local_path: localPath }),
+
+  browseFolder: () =>
+    axios.get(`${API_BASE}/browse-folder`),
+
   getStatus: (jobId) =>
     axios.get(`${API_BASE}/status/${jobId}`),
 
@@ -39,14 +45,24 @@ export const api = {
   getFiles: (repoId) =>
     axios.get(`${API_BASE}/files`, { params: repoId ? { repo_id: repoId } : {} }),
 
-  getFunctionInfo: (functionName) =>
-    axios.get(`${API_BASE}/function/${functionName}`),
+  getFunctionInfo: (functionName, repoId, filePath) =>
+    axios.get(`${API_BASE}/function/${encodeURIComponent(functionName)}`, {
+      params: {
+        ...(repoId ? { repo_id: repoId } : {}),
+        ...(filePath ? { file_path: filePath } : {})
+      }
+    }),
 
   getFunctionGraph: (repoId) =>
     axios.get(`${API_BASE}/graph/functions`, { params: repoId ? { repo_id: repoId } : {} }),
 
-  getFunctionCallChain: (functionName, repoId) =>
-    axios.get(`${API_BASE}/graph/function/${functionName}`, { params: repoId ? { repo_id: repoId } : {} }),
+  getFunctionCallChain: (functionName, repoId, filePath) =>
+    axios.get(`${API_BASE}/graph/function/${encodeURIComponent(functionName)}`, {
+      params: {
+        ...(repoId ? { repo_id: repoId } : {}),
+        ...(filePath ? { file_path: filePath } : {})
+      }
+    }),
 
   // Version Tracking APIs
   getRepositories: () =>

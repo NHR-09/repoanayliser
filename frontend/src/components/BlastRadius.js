@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { api } from '../services/api';
 import Highlighter from './Highlighter';
+import SearchableTreeSelect from './SearchableTreeSelect';
 import * as d3 from 'd3';
 
 export default function BlastRadius({ repoId }) {
@@ -21,6 +22,8 @@ export default function BlastRadius({ repoId }) {
   };
 
   React.useEffect(() => {
+    setFilePath('');
+    setResult(null);
     loadFiles();
   }, [repoId]);
 
@@ -96,12 +99,17 @@ export default function BlastRadius({ repoId }) {
       <h2 style={styles.heading}>Blast Radius Analyzer</h2>
 
       <div style={styles.controls}>
-        <select value={filePath} onChange={(e) => setFilePath(e.target.value)} style={styles.select}>
-          <option value="">Select file…</option>
-          {files.filter(f => f).map(f => (
-            <option key={f} value={f}>{f.split(/[/\\]/).pop()}</option>
-          ))}
-        </select>
+        <SearchableTreeSelect
+          items={files.filter(Boolean).map(file => ({
+            value: file,
+            label: file.split(/[/\\]/).pop(),
+            path: file
+          }))}
+          value={filePath}
+          onChange={setFilePath}
+          placeholder="Select file…"
+          searchPlaceholder="Search files or directories…"
+        />
         <select value={changeType} onChange={(e) => setChangeType(e.target.value)} style={{ ...styles.select, flex: 'none', width: '120px' }}>
           <option value="modify">MODIFY</option>
           <option value="delete">DELETE</option>

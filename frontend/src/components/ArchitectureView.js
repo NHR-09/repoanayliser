@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
 import { formatFilePath, formatEvidenceText } from '../utils/formatters';
+import MarkdownContent from './MarkdownContent';
 
 export default function ArchitectureView({ repoId }) {
   const [architecture, setArchitecture] = useState(null);
@@ -38,29 +39,22 @@ export default function ArchitectureView({ repoId }) {
 
   const getPatternIcon = (name) => {
     const n = (name || '').toLowerCase();
-    if (n.includes('layer')) return '—';
-    if (n.includes('mvc')) return '—';
-    if (n.includes('hexagonal')) return '—';
-    if (n.includes('event')) return '—';
-    if (n.includes('modular')) return '—';
-    if (n.includes('monolith')) return '—';
-    if (n.includes('micro')) return '—';
-    return '—';
+    if (n.includes('layer')) return '🏗️';
+    if (n.includes('mvc')) return '🔺';
+    if (n.includes('hexagonal')) return '⬡';
+    if (n.includes('event')) return '⚡';
+    if (n.includes('pipe')) return '🔗';
+    if (n.includes('client')) return '🌐';
+    if (n.includes('microkernel') || n.includes('plug')) return '🧩';
+    if (n.includes('microservice')) return '🔬';
+    if (n.includes('modular')) return '📦';
+    if (n.includes('monolith')) return '🏛️';
+    return '📐';
   };
 
   const formatMarkdown = (text) => {
     if (!text) return null;
-    text = formatEvidenceText(text);
-    return text.split('\n').map((line, idx) => {
-      line = line.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-      line = line.replace(/`(.+?)`/g, '<code style="background:var(--bg-elevated);padding:2px 6px;border-radius:4px;font-size:12px;color:var(--text-primary);font-family:var(--font-mono)">$1</code>');
-      if (line.startsWith('###')) return <h4 key={idx} style={s.h4} dangerouslySetInnerHTML={{ __html: line.replace(/###\s*/, '') }} />;
-      if (line.startsWith('##')) return <h3 key={idx} style={s.h3} dangerouslySetInnerHTML={{ __html: line.replace(/##\s*/, '') }} />;
-      if (/^\d+\.\s/.test(line)) return <div key={idx} style={s.listItem} dangerouslySetInnerHTML={{ __html: line }} />;
-      if (/^[-*]\s/.test(line)) return <div key={idx} style={s.bulletItem} dangerouslySetInnerHTML={{ __html: line.replace(/^[-*]\s/, '• ') }} />;
-      if (line.trim()) return <p key={idx} style={s.paragraph} dangerouslySetInnerHTML={{ __html: line }} />;
-      return null;
-    });
+    return <MarkdownContent>{formatEvidenceText(text)}</MarkdownContent>;
   };
 
   // — Loading / Error / Empty —
@@ -84,9 +78,9 @@ export default function ArchitectureView({ repoId }) {
   if (architecture.error) return <div style={s.container}><div style={s.errorBox}>{architecture.error}</div></div>;
 
   const sections = [
-    { id: 'overview', icon: '', label: 'System Overview', content: architecture.overview },
-    { id: 'modules', icon: '', label: 'Module Responsibilities', content: architecture.modules },
-    { id: 'key_files', icon: '', label: 'Key Files', content: architecture.key_files },
+    { id: 'overview', icon: '📋', label: 'System Overview', content: architecture.overview },
+    { id: 'modules', icon: '📦', label: 'Module Responsibilities', content: architecture.modules },
+    { id: 'key_files', icon: '📄', label: 'Key Files', content: architecture.key_files },
   ];
 
   return (
@@ -109,23 +103,29 @@ export default function ArchitectureView({ repoId }) {
       {stats.total_files > 0 && (
         <div style={s.statsBanner}>
           <div style={s.statCard}>
-            <div style={s.statIcon}></div>
+            <div style={s.statIcon}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/></svg>
+            </div>
             <div style={s.statValue}>{stats.total_files}</div>
             <div style={s.statLabel}>Files</div>
           </div>
           <div style={s.statCard}>
-            <div style={s.statIcon}></div>
+            <div style={s.statIcon}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M6 21V9a9 9 0 0 0 9 9"/></svg>
+            </div>
             <div style={s.statValue}>{stats.total_dependencies}</div>
             <div style={s.statLabel}>Dependencies</div>
           </div>
           <div style={s.statCard}>
-            <div style={s.statIcon}></div>
+            <div style={s.statIcon}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            </div>
             <div style={s.statValue}>{stats.avg_coupling || '—'}</div>
             <div style={s.statLabel}>Avg Coupling</div>
           </div>
           <div style={s.statCard}>
-            <div style={{ ...s.statIcon, ...(stats.cycle_count > 0 ? { background: 'var(--red-dim)' } : {}) }}>
-              {stats.cycle_count > 0 ? '—' : '—'}
+            <div style={{ ...s.statIcon, ...(stats.cycle_count > 0 ? { background: 'var(--red-dim)', color: '#f87171' } : { color: '#4ade80' }) }}>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
             </div>
             <div style={{ ...s.statValue, ...(stats.cycle_count > 0 ? { color: '#f87171' } : { color: '#4ade80' }) }}>{stats.cycle_count}</div>
             <div style={s.statLabel}>Cycles</div>
@@ -231,7 +231,7 @@ export default function ArchitectureView({ repoId }) {
           <div style={s.evidenceGrid}>
             {architecture.evidence.map((item, idx) => (
               <div key={idx} style={s.evidenceChip} title={item.file || item.source}>
-                <span style={s.evidenceIcon}></span>
+                <span style={s.evidenceIcon}>📄</span>
                 <div>
                   <div style={s.evidenceName}>
                     {formatFilePath(item.file || item.source, 2)}

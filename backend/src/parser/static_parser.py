@@ -1,26 +1,34 @@
 import tree_sitter_python as tspython
 import tree_sitter_javascript as tsjavascript
+import tree_sitter_typescript as tstypescript
 from tree_sitter import Language, Parser
-from pathlib import Path
 from typing import Dict, List
 
+
 class StaticParser:
+    JS_LANGUAGES = {'javascript', 'typescript', 'tsx'}
+    JS_FUNCTION_NODES = {
+        'function_declaration', 'method_definition', 'arrow_function',
+        'function_expression'
+    }
+
     def __init__(self):
         self.parsers = {
             'python': Parser(Language(tspython.language())),
-            'javascript': Parser(Language(tsjavascript.language()))
+            'javascript': Parser(Language(tsjavascript.language())),
+            'typescript': Parser(Language(tstypescript.language_typescript())),
+            'tsx': Parser(Language(tstypescript.language_tsx()))
         }
-    
+
     def parse_file(self, file_path: str, language: str) -> Dict:
         with open(file_path, 'rb') as f:
             code = f.read()
-        
+
         parser = self.parsers.get(language)
         if not parser:
             return {}
-        
+
         tree = parser.parse(code)
-        
         return {
             'file': file_path,
             'language': language,
@@ -28,12 +36,14 @@ class StaticParser:
             'functions': self._extract_functions(tree.root_node, code),
             'imports': self._extract_imports(tree.root_node, code, language),
             'function_calls': self._extract_function_calls(tree.root_node, code, language),
-            'function_to_function_calls': self._extract_function_to_function_calls(tree.root_node, code, language)
+            'function_to_function_calls': self._extract_function_to_function_calls(
+                tree.root_node, code, language
+            )
         }
-    
+
     def _extract_classes(self, node, code) -> List[Dict]:
         classes = []
-        if node.type == 'class_definition':
+        if node.type in ('class_definition', 'class_declaration'):
             classes.append({
                 'name': self._get_node_text(node.child_by_field_name('name'), code),
                 'line': node.start_point[0] + 1
@@ -41,18 +51,16 @@ class StaticParser:
         for child in node.children:
             classes.extend(self._extract_classes(child, code))
         return classes
-    
+
     def _extract_functions(self, node, code) -> List[Dict]:
         functions = []
-        if node.type in ('function_definition', 'function_declaration'):
-            functions.append({
-                'name': self._get_node_text(node.child_by_field_name('name'), code),
-                'line': node.start_point[0] + 1
-            })
+        name = self._get_function_name(node, code)
+        if name:
+            functions.append({'name': name, 'line': node.start_point[0] + 1})
         for child in node.children:
             functions.extend(self._extract_functions(child, code))
         return functions
-    
+
     def _extract_imports(self, node, code, language) -> List[str]:
         imports = []
         if language == 'python':
@@ -64,16 +72,20 @@ class StaticParser:
                 for child in node.children:
                     if child.type == 'dotted_name':
                         imports.append(self._get_node_text(child, code))
-        elif language == 'javascript' and node.type == 'import_statement':
-            for child in node.children:
-                if child.type == 'string':
-                    imports.append(self._get_node_text(child, code).strip('"\'\''))
+        elif language in self.JS_LANGUAGES and node.type in ('import_statement', 'export_statement'):
+            source = node.child_by_field_name('source')
+            if source and source.type == 'string':
+                imports.append(self._get_node_text(source, code).strip('"\''))
+            else:
+                for child in node.children:
+                    if child.type == 'string':
+                        imports.append(self._get_node_text(child, code).strip('"\''))
         for child in node.children:
             imports.extend(self._extract_imports(child, code, language))
         return imports
-    
+
     def _extract_function_calls(self, node, code, language) -> List[str]:
-        """Extract function calls from code"""
+        """Extract function calls from code."""
         calls = []
         if language == 'python' and node.type == 'call':
             func_node = node.child_by_field_name('function')
@@ -82,7 +94,7 @@ class StaticParser:
                     calls.append(self._get_node_text(func_node, code))
                 elif func_node.type == 'attribute':
                     calls.append(self._get_node_text(func_node, code).split('.')[-1])
-        elif language == 'javascript' and node.type == 'call_expression':
+        elif language in self.JS_LANGUAGES and node.type == 'call_expression':
             func_node = node.child_by_field_name('function')
             if func_node:
                 if func_node.type == 'identifier':
@@ -94,32 +106,41 @@ class StaticParser:
         for child in node.children:
             calls.extend(self._extract_function_calls(child, code, language))
         return calls
-    
+
     def _get_node_text(self, node, code) -> str:
         if not node:
             return ""
         return code[node.start_byte:node.end_byte].decode('utf8')
-    
+
+    def _get_function_name(self, node, code) -> str:
+        """Return the declared name for Python/JS/TS functions and methods."""
+        if node.type in ('function_definition', 'function_declaration', 'method_definition'):
+            return self._get_node_text(node.child_by_field_name('name'), code)
+
+        if node.type in ('arrow_function', 'function_expression'):
+            parent = node.parent
+            if parent and parent.type in ('variable_declarator', 'pair', 'field_definition'):
+                return self._get_node_text(parent.child_by_field_name('name'), code)
+
+        return ''
+
     def _extract_function_to_function_calls(self, node, code, language) -> List[Dict]:
-        """Extract which functions call which other functions"""
+        """Extract which functions call which other functions."""
         result = []
-        
-        if language == 'python':
-            if node.type == 'function_definition':
-                func_name = self._get_node_text(node.child_by_field_name('name'), code)
+        if language == 'python' and node.type == 'function_definition':
+            func_name = self._get_node_text(node.child_by_field_name('name'), code)
+            calls = self._extract_function_calls(node, code, language)
+            for called in set(calls):
+                if called != func_name:
+                    result.append({'caller': func_name, 'callee': called})
+        elif language in self.JS_LANGUAGES:
+            func_name = self._get_function_name(node, code)
+            if func_name:
                 calls = self._extract_function_calls(node, code, language)
                 for called in set(calls):
-                    result.append({'caller': func_name, 'callee': called})
-        elif language == 'javascript':
-            if node.type == 'function_declaration':
-                func_name = self._get_node_text(node.child_by_field_name('name'), code)
-                calls = self._extract_function_calls(node, code, language)
-                for called in set(calls):
-                    result.append({'caller': func_name, 'callee': called})
-        
+                    if called != func_name:
+                        result.append({'caller': func_name, 'callee': called})
+
         for child in node.children:
-            if child.type in ('function_definition', 'function_declaration'):
-                continue  # Each nested function is handled in its own recursion pass
             result.extend(self._extract_function_to_function_calls(child, code, language))
-        
         return result

@@ -12,7 +12,7 @@ from .graph.dependency_mapper import DependencyMapper
 from .graph.analyzers import PatternDetector, CouplingAnalyzer
 from .graph.version_tracker import VersionTracker
 from .graph.blast_radius import BlastRadiusAnalyzer
-from .retrieval.vector_store import VectorStore
+from .retrieval.graphify_retriever import GraphifyRetriever
 from .retrieval.retrieval_engine import RetrievalEngine
 from .reasoning.llm_reasoner import LLMReasoner
 from .config import settings
@@ -21,6 +21,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 MAX_CACHE_SIZE = 100
+ARCHITECTURE_CACHE_VERSION = 2
 
 class AnalysisEngine:
     def __init__(self):
@@ -32,8 +33,8 @@ class AnalysisEngine:
             settings.neo4j_password
         )
         self.dependency_mapper = DependencyMapper()
-        self.vector_store = VectorStore(settings.chroma_path)
-        self.retrieval_engine = RetrievalEngine(self.vector_store, self.graph_db)
+        self.graphify = GraphifyRetriever()
+        self.retrieval_engine = RetrievalEngine(self.graphify, self.graph_db)
         self.llm = LLMReasoner()
         self.version_tracker = VersionTracker(self.graph_db)
         self.pattern_detector = None
@@ -81,7 +82,7 @@ class AnalysisEngine:
                 self._rebuild_from_cache(repo_id)
                 
                 # Warm memory cache with architecture data (version-scoped key)
-                cache_key = f"arch_{repo_id}_{commit_info['commit_hash']}"
+                cache_key = f"arch_v{ARCHITECTURE_CACHE_VERSION}_{repo_id}_{commit_info['commit_hash']}"
                 with self.cache_lock:
                     self.memory_cache[cache_key] = cached.get('architecture', {})
                     self._enforce_cache_limit()
@@ -107,7 +108,7 @@ class AnalysisEngine:
                         'overview': cached.get('architecture', {}).get('overview', ''),
                         'modules': cached.get('architecture', {}).get('modules', ''),
                         'key_files': cached.get('architecture', {}).get('key_files', ''),
-                        'stats': self._compute_arch_stats(),
+                        'stats': self._compute_arch_stats(repo_id),
                         'evidence': cached.get('architecture', {}).get('evidence', []),
                         'macro': cached.get('architecture', {}).get('macro', ''),
                         'meso': cached.get('architecture', {}).get('meso', ''),
@@ -141,7 +142,32 @@ class AnalysisEngine:
                 return True
             return False
     
+    def analyze_local_path(self, local_path: str) -> Dict:
+        """Analyze a local directory without git cloning."""
+        logger.info(f"\n{'='*60}")
+        logger.info("🚀 Starting local path analysis")
+        logger.info(f"{'='*60}")
+
+        repo_path = self.repo_loader.use_local_path(local_path)
+        self.repo_path = repo_path
+
+        # Use resolved absolute path as the stable identifier
+        abs_path_str = str(repo_path)
+        repo_id = hashlib.sha256(abs_path_str.encode()).hexdigest()[:16]
+
+        # Use git commit if available, else fall back to folder mtime hash
+        commit_info = self.version_tracker.get_current_commit(abs_path_str)
+        if not commit_info:
+            import time
+            mtime = str(int(repo_path.stat().st_mtime))
+            synthetic_hash = hashlib.sha256(f"{abs_path_str}_{mtime}".encode()).hexdigest()
+            commit_info = None  # Non-git: always re-analyse (no caching on mtime)
+            logger.info("⚠️  No git repo detected — skipping cache, running fresh analysis")
+
+        return self._full_analysis(abs_path_str, repo_path, repo_id)
+
     def _full_analysis(self, repo_url: str, repo_path: Path, repo_id: str) -> Dict:
+
         """Perform full analysis with LLM and caching"""
         # Check if snapshot already exists for current commit (prevent duplicates)
         commit_info = self.version_tracker.get_current_commit(str(repo_path))
@@ -166,7 +192,7 @@ class AnalysisEngine:
                             'overview': existing.get('architecture', {}).get('overview', ''),
                             'modules': existing.get('architecture', {}).get('modules', ''),
                             'key_files': existing.get('architecture', {}).get('key_files', ''),
-                            'stats': self._compute_arch_stats(),
+                            'stats': self._compute_arch_stats(repo_id),
                             'evidence': existing.get('architecture', {}).get('evidence', []),
                             'macro': existing.get('architecture', {}).get('macro', ''),
                             'meso': existing.get('architecture', {}).get('meso', ''),
@@ -193,15 +219,7 @@ class AnalysisEngine:
             logger.info(f"📦 Repository ID: {self.current_repo_id}")
             logger.info(f"📸 New Snapshot ID: {self.current_snapshot_id}")
         if not repo_exists:
-            logger.info("📜 Importing git commit history (first analysis)...")
-            git_result = self.version_tracker.import_git_history(
-                self.current_repo_id, str(repo_path), max_commits=100
-            )
-            if git_result['status'] == 'success':
-                logger.info(f"   ✓ Processed {git_result['commits_processed']} commits")
-                logger.info(f"   ✓ Created {git_result['versions_created']} versions")
-            else:
-                logger.warning(f"   ⚠ Git history not available: {git_result.get('message', 'Unknown')}")
+            logger.info("📜 Git history will be imported after current files are indexed...")
         else:
             logger.info("🔄 Re-analyzing existing repository (tracking new changes)...")
         
@@ -218,7 +236,7 @@ class AnalysisEngine:
         
         files = self.repo_loader.scan_files(
             repo_path,
-            ['.py', '.js', '.java']
+            ['.py', '.js', '.jsx', '.ts', '.tsx', '.java']
         )
         
         logger.info(f"\n📝 Parsing {len(files)} files...")
@@ -230,39 +248,92 @@ class AnalysisEngine:
                 file_info['path'],
                 file_info['language']
             )
+            # Unsupported parsers still get a File node and snapshot membership.
+            if not parsed:
+                parsed = {
+                    'file': file_info['path'],
+                    'language': file_info['language'],
+                    'classes': [], 'functions': [], 'imports': [],
+                    'function_calls': [], 'function_to_function_calls': []
+                }
+            parsed['file_hash'] = self.version_tracker.compute_file_hash(file_info['path'])
             parsed_files.append(parsed)
-            
-            # Track version with SHA-256 (only creates new version if commit changed)
-            version_result = self.version_tracker.track_file_version(
-                self.current_repo_id,
-                file_info['path'],
-                str(repo_path)
+
+        logger.info("💾 Writing files, symbols, imports, and calls in batches...")
+        stored = self.graph_db.bulk_store_analysis(
+            parsed_files, self.current_repo_id, self.current_snapshot_id
+        )
+        logger.info(
+            "   ✅ Stored %(files)s files, %(functions)s functions, "
+            "%(imports)s imports, and %(function_calls)s function edges" % stored
+        )
+
+        if not repo_exists:
+            logger.info("📜 Importing git commit history in batches...")
+            git_result = self.version_tracker.import_git_history(
+                self.current_repo_id, str(repo_path), max_commits=100
             )
-            parsed['version_status'] = version_result['status']
-            parsed['file_hash'] = version_result.get('hash', '')
-            
-            if version_result['status'] == 'new_version':
-                logger.info(f"   📌 New version: {file_info['relative_path']}")
-            elif version_result['status'] == 'unchanged':
-                logger.debug(f"   ✓ Unchanged: {file_info['relative_path']} (commit {version_result.get('commit', 'N/A')})")
-            
-            self._store_in_graph(parsed)
-            self._store_in_vector(parsed)
-            
-            # Link file to snapshot
-            with self.graph_db.driver.session() as session:
-                session.run("""
-                    MATCH (s:Snapshot {snapshot_id: $snapshot_id})
-                    MATCH (f:File {file_path: $file_path})
-                    MERGE (s)-[:ANALYZED_FILE]->(f)
-                    """,
-                    snapshot_id=self.current_snapshot_id,
-                    file_path=file_info['path']
+            if git_result['status'] == 'success':
+                logger.info(f"   ✓ Processed {git_result['commits_processed']} commits")
+                logger.info(f"   ✓ Created {git_result['versions_created']} versions")
+            else:
+                logger.warning(
+                    f"   ⚠ Git history not available: "
+                    f"{git_result.get('message', 'Unknown')}"
                 )
+
+        version_results = self.version_tracker.track_file_versions(
+            self.current_repo_id,
+            [{'path': item['file'], 'hash': item.get('file_hash', '')}
+             for item in parsed_files],
+            str(repo_path),
+            commit_info=commit_info
+        )
+        for parsed in parsed_files:
+            normalized = str(Path(parsed['file']).resolve())
+            parsed['version_status'] = version_results.get(
+                normalized, {'status': 'error'}
+            )['status']
+        new_versions = sum(
+            result['status'] == 'new_version' for result in version_results.values()
+        )
+        if version_results:
+            logger.info(f"   ✅ Version tracking complete ({new_versions} new, "
+                        f"{len(version_results) - new_versions} unchanged)")
         
         logger.info("\n🕸️ Building dependency graph...")
         self.dependency_mapper.build_graph(parsed_files)
         
+        # Index repo with Graphify for structural LLM context
+        logger.info("📊 Indexing with Graphify for structural context...")
+        graphify_ok = self.graphify.index_repo(str(repo_path))
+        if graphify_ok:
+            logger.info(f"   ✅ Graphify indexed {len(self.graphify._nodes)} nodes, {len(self.graphify._edges)} edges")
+
+            # --- Supplement dependency_mapper with Graphify's resolved edges ---
+            # Graphify uses full AST import resolution vs. our fuzzy filename matching,
+            # so merging its edges fills gaps (relative imports, package paths, aliases).
+            logger.info("🔗 Merging Graphify dependency edges into graph...")
+            graphify_edges = self.graphify.get_dependency_edges()
+            new_nx_edges = 0
+            new_neo4j_edges = []
+
+            for src, tgt in graphify_edges:
+                # Add to NetworkX only if not already present
+                if not self.dependency_mapper.graph.has_edge(src, tgt):
+                    self.dependency_mapper.graph.add_edge(src, tgt, type="graphify_import")
+                    new_nx_edges += 1
+                    new_neo4j_edges.append((src, tgt))
+
+            # Persist all dependency edges together below.
+            if new_neo4j_edges:
+                logger.info(f"   ✅ Added {new_nx_edges} new edges from Graphify "
+                            f"({len(self.dependency_mapper.graph.edges())} total in graph)")
+            else:
+                logger.info("   ✅ No new edges — dependency graph already complete")
+        else:
+            logger.warning("   ⚠️ Graphify unavailable — architecture explanations will use graph topology only")
+
         # Store dependencies in Neo4j
         logger.info("💾 Storing dependencies in Neo4j...")
         self._store_dependencies_in_neo4j()
@@ -271,6 +342,9 @@ class AnalysisEngine:
         logger.info("🔗 Creating transitive function relationships...")
         transitive_count = self.graph_db.create_transitive_function_calls(self.current_repo_id)
         logger.info(f"   ✅ Created {transitive_count} transitive relationships")
+        
+        # Clean up any orphaned nodes (Functions/Classes not connected to a File)
+        self.graph_db.cleanup_orphaned_nodes()
         
         logger.info("🔍 Detecting architectural patterns...")
         self.pattern_detector = PatternDetector(self.dependency_mapper.graph)
@@ -359,15 +433,21 @@ class AnalysisEngine:
                 old_repo_id = self.current_repo_id
                 if old_repo_id and old_repo_id != repo_id:
                     with self.cache_lock:
-                        stale_keys = [k for k in self.memory_cache 
-                                     if k.startswith(f"arch_{old_repo_id}") or 
-                                        k.startswith(f"impact_{old_repo_id}")]
+                        stale_keys = [
+                            key for key in self.memory_cache
+                            if old_repo_id in key
+                        ]
                         for k in stale_keys:
                             del self.memory_cache[k]
                         logger.info(f"🗑️ Cleared {len(stale_keys)} stale cache entries from repo {old_repo_id[:8]}")
                 
                 self.current_repo_id = repo_id
                 self.repo_path = Path(record['path'])
+
+                # Graphify holds one repository in memory. Reload it whenever
+                # the active repository changes so LLM evidence cannot leak
+                # from the previously selected repository.
+                self.graphify.index_repo(str(self.repo_path))
                 
                 # Rebuild dependency graph from stored data (with imports & dependencies)
                 self._rebuild_from_cache(repo_id)
@@ -397,7 +477,7 @@ class AnalysisEngine:
         # Check memory cache first (thread-safe, version-scoped)
         commit_info = self.version_tracker.get_current_commit(str(self.repo_path)) if self.repo_path else None
         commit_hash = commit_info['commit_hash'] if commit_info else 'unknown'
-        cache_key = f"arch_{self.current_repo_id}_{commit_hash}"
+        cache_key = f"arch_v{ARCHITECTURE_CACHE_VERSION}_{self.current_repo_id}_{commit_hash}"
         with self.cache_lock:
             if cache_key in self.memory_cache:
                 logger.info("💾 Using in-memory cached architecture")
@@ -412,7 +492,7 @@ class AnalysisEngine:
             if cached:
                 logger.info("📦 Using database cached architecture")
                 # Compute stats on-the-fly for cached text data
-                cached['stats'] = self._compute_arch_stats()
+                cached['stats'] = self._compute_arch_stats(self.current_repo_id)
                 with self.cache_lock:
                     self.memory_cache[cache_key] = cached
                     self._enforce_cache_limit()
@@ -430,12 +510,14 @@ class AnalysisEngine:
                     MATCH (s:Snapshot {snapshot_id: $snapshot_id})
                     SET s.arch_macro = $macro,
                         s.arch_meso = $meso,
-                        s.arch_micro = $micro
+                        s.arch_micro = $micro,
+                        s.arch_scope_version = $cache_version
                     """,
                     snapshot_id=self.current_snapshot_id,
                     macro=arch_explanation.get('macro', ''),
                     meso=arch_explanation.get('meso', ''),
-                    micro=arch_explanation.get('micro', '')
+                    micro=arch_explanation.get('micro', ''),
+                    cache_version=ARCHITECTURE_CACHE_VERSION
                 )
         
         # Store in memory (thread-safe with size limit)
@@ -445,11 +527,12 @@ class AnalysisEngine:
         
         return arch_explanation
     
-    def _compute_arch_stats(self) -> Dict:
+    def _compute_arch_stats(self, repo_id: str = None) -> Dict:
         """Compute structural stats from existing analyzers (no LLM needed).
         Falls back to Snapshot node properties when File nodes are missing."""
-        all_files = self.graph_db.get_all_files()
-        graph_data = self.graph_db.get_graph_data()
+        repo_id = repo_id or self.current_repo_id
+        all_files = self.graph_db.get_all_files(repo_id)
+        graph_data = self.graph_db.get_graph_data(repo_id)
         coupling_data = self.coupling_analyzer.analyze() if self.coupling_analyzer else {}
         cycles = self.dependency_mapper.detect_cycles() if self.dependency_mapper else []
         patterns = self.pattern_detector.detect_patterns() if self.pattern_detector else {}
@@ -525,18 +608,26 @@ class AnalysisEngine:
         patterns = self.pattern_detector.detect_patterns()
         
         # Get all files and their dependencies from graph
-        all_files = self.graph_db.get_all_files()
+        all_files = self.graph_db.get_all_files(self.current_repo_id)
         
         # Get graph structure data
-        graph_data = self.graph_db.get_graph_data()
+        graph_data = self.graph_db.get_graph_data(self.current_repo_id)
         
         # Build graph context for LLM
         graph_context = self._build_graph_context(graph_data, all_files)
         
-        # Retrieve evidence from vector store
+        # Retrieve evidence from Graphify knowledge graph
         evidence = self.retrieval_engine.retrieve_evidence(
             "system architecture patterns modules structure"
         )
+        
+        # Build Graphify structural context string for LLM
+        graphify_context = None
+        if self.graphify.is_available:
+            arch_nodes = self.graphify.get_context_for_query(
+                "architecture module service class function entry point", top_k=15
+            )
+            graphify_context = self.graphify.format_context_for_llm(arch_nodes)
         
         # Compute structural stats (no LLM tokens needed)
         coupling_data = self.coupling_analyzer.analyze() if self.coupling_analyzer else {}
@@ -573,10 +664,11 @@ class AnalysisEngine:
             for e in evidence_items
         ])
         
-        # Single LLM call instead of 3
-        logger.info("🤖 Generating architecture report (single LLM call)...")
+        # Single LLM call — enriched with Graphify structural context
+        logger.info("🤖 Generating architecture report (single LLM call, Graphify-enriched)...")
         sections = self.llm.explain_architecture_report(
-            patterns_text, graph_context, top_dirs_text, evidence_text
+            patterns_text, graph_context, top_dirs_text, evidence_text,
+            graphify_context=graphify_context
         )
         
         stats = {
@@ -615,6 +707,7 @@ class AnalysisEngine:
                     arch_macro: $macro,
                     arch_meso: $meso,
                     arch_micro: $micro,
+                    arch_scope_version: $cache_version,
                     cached_at: datetime()
                 }
                 """,
@@ -623,7 +716,8 @@ class AnalysisEngine:
                 coupling=json.dumps(coupling),
                 macro=arch_explanation.get('macro', ''),
                 meso=arch_explanation.get('meso', ''),
-                micro=arch_explanation.get('micro', '')
+                micro=arch_explanation.get('micro', ''),
+                cache_version=ARCHITECTURE_CACHE_VERSION
             )
     
     def _get_cached_snapshot(self, repo_id: str, commit_hash: str) -> Dict:
@@ -645,7 +739,8 @@ class AnalysisEngine:
                        s.total_files as total_files,
                        s.arch_macro as macro,
                        s.arch_meso as meso,
-                       s.arch_micro as micro
+                       s.arch_micro as micro,
+                       s.arch_scope_version as arch_scope_version
                 """,
                 repo_id=repo_id,
                 commit_hash=commit_hash
@@ -658,21 +753,24 @@ class AnalysisEngine:
                 return None
             
             if record:
+                architecture_is_current = (
+                    record['arch_scope_version'] == ARCHITECTURE_CACHE_VERSION
+                )
                 return {
                     'snapshot_id': record['snapshot_id'],
                     'patterns': json.loads(record['patterns']) if record['patterns'] else {},
                     'coupling': json.loads(record['coupling']) if record['coupling'] else {},
                     'total_files': record['total_files'] or 0,
-                    'arch_macro': record['macro'],
+                    'arch_macro': record['macro'] if architecture_is_current else '',
                     'architecture': {
-                        'overview': record['macro'] or '',
-                        'modules': record['meso'] or '',
-                        'key_files': record['micro'] or '',
+                        'overview': (record['macro'] or '') if architecture_is_current else '',
+                        'modules': (record['meso'] or '') if architecture_is_current else '',
+                        'key_files': (record['micro'] or '') if architecture_is_current else '',
                         'stats': {},
                         'evidence': [],
-                        'macro': record['macro'] or '',
-                        'meso': record['meso'] or '',
-                        'micro': record['micro'] or ''
+                        'macro': (record['macro'] or '') if architecture_is_current else '',
+                        'meso': (record['meso'] or '') if architecture_is_current else '',
+                        'micro': (record['micro'] or '') if architecture_is_current else ''
                     }
                 }
             return None
@@ -780,13 +878,15 @@ class AnalysisEngine:
             result = session.run("""
                 MATCH (s:Snapshot {repo_id: $repo_id, commit_hash: $commit_hash})
                 WHERE s.arch_macro IS NOT NULL AND s.arch_macro <> ''
+                  AND s.arch_scope_version = $cache_version
                 RETURN s.arch_macro as macro, s.arch_meso as meso, 
                        s.arch_micro as micro
                 ORDER BY s.created_at DESC
                 LIMIT 1
                 """,
                 repo_id=repo_id,
-                commit_hash=commit_hash
+                commit_hash=commit_hash,
+                cache_version=ARCHITECTURE_CACHE_VERSION
             )
             record = result.single()
             if record:
@@ -869,34 +969,22 @@ class AnalysisEngine:
         risk_level = result.get('risk_level', 'unknown')
         risk_score = result.get('risk_score', 0)
         
-        # Build LLM prompt with blast radius data
-        filename = Path(file_path).name
-        direct_list = '\n'.join([f"  - {Path(f).name}" for f in direct[:10] if f]) or '  None'
-        indirect_list = '\n'.join([f"  - {Path(f).name}" for f in indirect[:10] if f]) or '  None'
-        func_list = '\n'.join([f"  - {fn['name']} ({fn['caller_count']} callers)" for fn in functions[:10]]) or '  None'
-        
-        prompt = f"""Analyze the impact of {change_type.upper()}ing file: {filename}
-
-BLAST RADIUS ANALYSIS:
-
-Direct Dependents ({len(direct)} files):
-{direct_list}
-
-Indirect Dependents ({len(indirect)} files):
-{indirect_list}
-
-Functions Affected ({len(functions)} functions):
-{func_list}
-
-Risk Assessment: {risk_level.upper()} (Score: {risk_score}/100)
-
-Provide a concise 2-3 sentence summary explaining:
-1. What components are directly impacted
-2. The cascading effects on the system
-3. Key risks to consider"""
-        
         try:
-            explanation = self.llm._call_llm(prompt)
+            # Get Graphify file-level context (actual functions/classes in the file)
+            graphify_file_ctx = None
+            if self.graphify.is_available:
+                graphify_file_ctx = self.graphify.get_path_context(file_path)
+
+            explanation = self.llm.explain_impact_with_graph(
+                file_path=file_path,
+                change_type=change_type,
+                direct=direct,
+                indirect=indirect,
+                functions=functions,
+                risk_level=risk_level,
+                risk_score=risk_score,
+                graphify_file_context=graphify_file_ctx,
+            )
             self.memory_cache[cache_key] = {
                 'explanation': explanation,
                 '_total_affected': result.get('total_affected', 0)
@@ -908,16 +996,25 @@ Provide a concise 2-3 sentence summary explaining:
         
         return result
     
-    def analyze_function(self, function_name: str) -> Dict:
+    def analyze_function(
+        self, function_name: str, repo_id: str = None, file_path: str = None
+    ) -> Dict:
         """Analyze function usage, callers, and provide LLM explanation"""
+        if repo_id and repo_id != self.current_repo_id:
+            if not self.load_repository_analysis(repo_id):
+                return {"error": "Repository not found"}
+
+        repo_id = repo_id or self.current_repo_id
         # Check memory cache
-        cache_key = f"func_{function_name}"
+        cache_key = f"func_{repo_id}_{file_path or 'any'}_{function_name}"
         if cache_key in self.memory_cache:
             logger.info("💾 Using cached function explanation")
             return self.memory_cache[cache_key]
         
         # Get function info from graph
-        function_info = self.graph_db.get_function_info(function_name)
+        function_info = self.graph_db.get_function_info(
+            function_name, repo_id=repo_id, file_path=file_path
+        )
         if not function_info:
             return {"error": f"Function '{function_name}' not found"}
         
@@ -927,7 +1024,9 @@ Provide a concise 2-3 sentence summary explaining:
         function_code = self._extract_function_code(file_path, function_name, start_line)
         
         # Get callers (who calls this function)
-        raw_callers = self.graph_db.get_function_callers(function_name, repo_id=self.current_repo_id)
+        raw_callers = self.graph_db.get_function_callers(
+            function_name, repo_id=repo_id, file_path=file_path
+        )
         # Transform to expected frontend format
         callers = []
         for c in raw_callers:
@@ -940,11 +1039,16 @@ Provide a concise 2-3 sentence summary explaining:
                 'line': c.get('line', 0)
             })
         
-        # Get semantic context from vector store
-        search_results = self.vector_store.search(
-            f"function {function_name} implementation usage",
-            n_results=3
-        )
+        # Get structural context from Graphify (replaces ChromaDB vector search)
+        search_results = []
+        if self.graphify.is_available:
+            file_ctx = self.graphify.get_path_context(file_path or "")
+            # Convert to format expected by llm.explain_function
+            for fn_name in file_ctx.get("functions", [])[:3]:
+                search_results.append({
+                    "code": f"function: {fn_name}",
+                    "metadata": {"file_path": file_path or ""},
+                })
         
         # Generate LLM explanation with actual code
         explanation = self.llm.explain_function(
@@ -992,6 +1096,10 @@ Provide a concise 2-3 sentence summary explaining:
         return file_path
     
     def _store_in_graph(self, parsed: Dict):
+        """Pass 1: Store file, class, and function NODES + imports.
+        Call edges are deferred to _store_edges_in_graph (pass 2)
+        so that all Function nodes exist before we try to link them.
+        """
         # Compute file content hash
         import hashlib
         try:
@@ -1022,18 +1130,22 @@ Provide a concise 2-3 sentence summary explaining:
             logger.info(f"   📦 Storing {len(imports)} imports for {parsed['file']}")
         for imp in imports:
             self.graph_db.create_import_relationship(parsed['file'], imp)
-        
-        # Store function calls
+    
+    def _store_edges_in_graph(self, parsed: Dict):
+        """Pass 2: Create function call edges AFTER all nodes exist.
+        This ensures cross-file callee Function nodes are already created.
+        """
+        # Store file-to-function calls
         function_calls = parsed.get('function_calls', [])
         if function_calls:
-            logger.info(f"   📞 Storing {len(set(function_calls))} unique function calls from {Path(parsed['file']).name}")
+            logger.debug(f"   📞 Storing {len(set(function_calls))} unique function calls from {Path(parsed['file']).name}")
             for called_func in set(function_calls):
                 self.graph_db.create_function_call(parsed['file'], called_func, self.current_repo_id)
         
         # Store function-to-function calls
         func_to_func_calls = parsed.get('function_to_function_calls', [])
         if func_to_func_calls:
-            logger.info(f"   🔗 Storing {len(func_to_func_calls)} function-to-function calls")
+            logger.debug(f"   🔗 Storing {len(func_to_func_calls)} function-to-function calls from {Path(parsed['file']).name}")
             for call in func_to_func_calls:
                 self.graph_db.create_function_to_function_call(
                     parsed['file'], 
@@ -1042,20 +1154,6 @@ Provide a concise 2-3 sentence summary explaining:
                     self.current_repo_id
                 )
     
-    def _store_in_vector(self, parsed: Dict):
-        """Store code in vector database for semantic search"""
-        code_text = self._extract_code_text(parsed)
-        if code_text.strip():
-            self.vector_store.add_code_chunk(
-                chunk_id=parsed['file'],
-                code=code_text,
-                metadata={
-                    'file_path': parsed['file'],
-                    'language': parsed['language'],
-                    'num_classes': len(parsed.get('classes', [])),
-                    'num_functions': len(parsed.get('functions', []))
-                }
-            )
     
     def _extract_code_text(self, parsed: Dict) -> str:
         """Extract meaningful code text for embedding"""
@@ -1126,7 +1224,7 @@ Provide a concise 2-3 sentence summary explaining:
                 OPTIONAL MATCH (f)-[:CONTAINS]->(fn:Function)
                 DETACH DELETE f, c, fn
                 """)
-        self.vector_store.clear()
+        # ChromaDB removed - Graphify handles context indexing
     
     def compare_snapshots(self, repo_id: str, snapshot1: str, snapshot2: str) -> Dict:
         """Compare two snapshots with cached architecture, coupling, and dependencies"""
@@ -1584,35 +1682,11 @@ Provide a concise 2-3 sentence summary explaining:
         """Store NetworkX graph dependencies as DEPENDS_ON relationships in Neo4j"""
         if not self.dependency_mapper or not self.dependency_mapper.graph:
             return
-        
-        edge_count = 0
-        with self.graph_db.driver.session() as session:
-            for source, target in self.dependency_mapper.graph.edges():
-                # Only store file-to-file dependencies (not external modules)
-                if '\\' in target or '/' in target:  # It's a file path
-                    # Normalize paths for consistent matching
-                    norm_source = str(Path(source).resolve()) if Path(source).exists() else source
-                    norm_target = str(Path(target).resolve()) if Path(target).exists() else target
-                    
-                    # Use flexible matching to find File nodes
-                    source_name = Path(source).name
-                    target_name = Path(target).name
-                    
-                    session.run("""
-                        MATCH (f1:File)
-                        WHERE f1.path = $source OR f1.file_path = $source
-                           OR f1.path ENDS WITH '\\\\' + $source_name
-                           OR f1.path ENDS WITH '/' + $source_name
-                        WITH f1
-                        MATCH (f2:File)
-                        WHERE f2.path = $target OR f2.file_path = $target
-                           OR f2.path ENDS WITH '\\\\' + $target_name
-                           OR f2.path ENDS WITH '/' + $target_name
-                        WITH f1, f2
-                        WHERE f1 <> f2
-                        MERGE (f1)-[:DEPENDS_ON]->(f2)
-                        """, source=norm_source, target=norm_target,
-                            source_name=source_name, target_name=target_name)
-                    edge_count += 1
-        
+
+        edges = [
+            (source, target)
+            for source, target in self.dependency_mapper.graph.edges()
+            if '\\' in target or '/' in target
+        ]
+        edge_count = self.graph_db.bulk_create_dependencies(edges)
         logger.info(f"   ✅ Stored {edge_count} DEPENDS_ON relationships in Neo4j")

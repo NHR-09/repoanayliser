@@ -11,7 +11,6 @@ import FunctionAnalysis from './components/FunctionAnalysis';
 import RepositoryManager from './components/RepositoryManager';
 import SnapshotComparison from './components/SnapshotComparison';
 import BlastRadius from './components/BlastRadius';
-import ConfidenceReport from './components/ConfidenceReport';
 
 function App() {
   const [activeTab, setActiveTab] = useState('analyze');
@@ -69,7 +68,6 @@ function App() {
     { id: 'coupling', label: 'Coupling', icon: '⬡' },
     { id: 'blast-radius', label: 'Blast', icon: '◎' },
     { id: 'impact', label: 'Impact', icon: '⚡' },
-    { id: 'confidence', label: 'Confidence', icon: '◉' },
     { id: 'functions', label: 'Functions', icon: 'ƒ' },
     { id: 'architecture', label: 'Architecture', icon: '△' },
     { id: 'graph', label: 'File Graph', icon: '⬢' },
@@ -123,7 +121,6 @@ function App() {
           {activeTab === 'coupling' && <CouplingAnalysis key={refreshKey} repoId={currentRepoId} />}
           {activeTab === 'blast-radius' && <BlastRadius key={refreshKey} repoId={currentRepoId} />}
           {activeTab === 'impact' && <ImpactAnalysis repoId={currentRepoId} />}
-          {activeTab === 'confidence' && <ConfidenceReport key={refreshKey} repoId={currentRepoId} />}
           {activeTab === 'functions' && <FunctionAnalysis key={refreshKey} repoId={currentRepoId} />}
           {activeTab === 'architecture' && <ArchitectureView key={refreshKey} repoId={currentRepoId} />}
           {activeTab === 'graph' && <DependencyGraph key={refreshKey} repoId={currentRepoId} />}
@@ -138,13 +135,7 @@ function App() {
         </div>
       </main>
 
-      {/* Footer */}
-      <footer style={styles.footer}>
-        <span style={styles.footerDot}></span>
-        API: localhost:8000
-        <span style={{ margin: '0 12px', color: 'var(--border)' }}>|</span>
-        Neo4j: localhost:7474
-      </footer>
+
     </div>
   );
 }

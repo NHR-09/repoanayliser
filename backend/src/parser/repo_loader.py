@@ -64,6 +64,22 @@ class RepositoryLoader:
         
         return target_path
     
+    def use_local_path(self, local_path: str) -> Path:
+        """Validate and return a local directory path without cloning."""
+        if not local_path:
+            raise ValueError("Local path cannot be empty")
+        
+        path = Path(local_path).resolve()
+        
+        if not path.exists():
+            raise ValueError(f"Path does not exist: {path}")
+        
+        if not path.is_dir():
+            raise ValueError(f"Path is not a directory: {path}")
+        
+        logger.info(f"📁 Using local path: {path}")
+        return path
+    
     def scan_files(self, repo_path: Path, extensions: List[str]) -> List[Dict]:
         logger.info(f"🔍 Scanning repository for files with extensions: {extensions}")
         files = []
@@ -83,5 +99,12 @@ class RepositoryLoader:
         return not any(part in exclude for part in path.parts)
     
     def _detect_language(self, ext: str) -> str:
-        mapping = {'.py': 'python', '.js': 'javascript', '.java': 'java'}
+        mapping = {
+            '.py': 'python',
+            '.js': 'javascript',
+            '.jsx': 'javascript',
+            '.ts': 'typescript',
+            '.tsx': 'tsx',
+            '.java': 'java'
+        }
         return mapping.get(ext, 'unknown')

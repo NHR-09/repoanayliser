@@ -20,7 +20,13 @@ class VersionTracker:
             constraints = [
                 "CREATE CONSTRAINT unique_repo IF NOT EXISTS FOR (r:Repository) REQUIRE r.repo_id IS UNIQUE",
                 "CREATE CONSTRAINT unique_user IF NOT EXISTS FOR (u:User) REQUIRE u.user_id IS UNIQUE",
-                "CREATE CONSTRAINT unique_commit IF NOT EXISTS FOR (c:Commit) REQUIRE (c.repo_id, c.commit_hash) IS UNIQUE"
+                "CREATE CONSTRAINT unique_commit IF NOT EXISTS FOR (c:Commit) REQUIRE (c.repo_id, c.commit_hash) IS UNIQUE",
+                "CREATE INDEX file_path_idx IF NOT EXISTS FOR (f:File) ON (f.path)",
+                "CREATE INDEX file_legacy_path_idx IF NOT EXISTS FOR (f:File) ON (f.file_path)",
+                "CREATE INDEX function_identity_idx IF NOT EXISTS FOR (f:Function) ON (f.name, f.file)",
+                "CREATE INDEX snapshot_id_idx IF NOT EXISTS FOR (s:Snapshot) ON (s.snapshot_id)",
+                "CREATE INDEX module_name_idx IF NOT EXISTS FOR (m:Module) ON (m.name)",
+                "CREATE INDEX version_identity_idx IF NOT EXISTS FOR (v:Version) ON (v.file_path, v.hash, v.commit_hash)"
             ]
             for constraint in constraints:
                 try:
@@ -245,6 +251,85 @@ class VersionTracker:
                 "hash": current_hash,
                 "commit": commit_info['commit_hash'][:8]
             }
+
+    def track_file_versions(self, repo_id: str, files: List[Dict], repo_path: str,
+                            commit_info: Optional[Dict] = None) -> Dict[str, Dict]:
+        """Track all current files with two database queries instead of two per file."""
+        commit_info = commit_info or self.get_current_commit(repo_path)
+        if not commit_info:
+            return {
+                item['path']: {
+                    'status': 'error', 'hash': item.get('hash', ''),
+                    'message': 'Not a git repository'
+                }
+                for item in files
+            }
+
+        rows = [
+            {'path': str(Path(item['path']).resolve()), 'hash': item.get('hash', '')}
+            for item in files if item.get('path') and item.get('hash')
+        ]
+        if not rows:
+            return {}
+
+        commit_hash = commit_info['commit_hash']
+        with self.graph_db.driver.session() as session:
+            result = session.run("""
+                UNWIND $rows AS item
+                OPTIONAL MATCH (v:Version {
+                    file_path: item.path,
+                    hash: item.hash,
+                    commit_hash: $commit_hash
+                })-[:VERSION_AT]->(:Commit {
+                    repo_id: $repo_id,
+                    commit_hash: $commit_hash
+                })
+                RETURN item.path AS path, count(v) > 0 AS exists
+                """, rows=rows, repo_id=repo_id, commit_hash=commit_hash)
+            existing = {record['path'] for record in result if record['exists']}
+            missing = [item for item in rows if item['path'] not in existing]
+
+            if missing:
+                session.run("""
+                    MATCH (r:Repository {repo_id: $repo_id})
+                    MATCH (c:Commit {repo_id: $repo_id, commit_hash: $commit_hash})
+                    MERGE (u:User {user_id: $author_email})
+                    SET u.email = $author_email, u.name = $author_name
+                    WITH r, c, u
+                    UNWIND $rows AS item
+                    MATCH (f:File {path: item.path})
+                    CREATE (v:Version {
+                        hash: item.hash,
+                        timestamp: datetime(),
+                        file_path: item.path,
+                        commit_hash: $commit_hash
+                    })
+                    CREATE (f)-[:HAS_VERSION]->(v)
+                    CREATE (v)-[:VERSION_AT]->(c)
+                    CREATE (v)-[:CREATED_BY]->(u)
+                    WITH f, v, c, item
+                    OPTIONAL MATCH (c)-[:PREVIOUS_COMMIT]->(prev_c:Commit)
+                    OPTIONAL MATCH (f)-[:HAS_VERSION]->(old:Version)-[:VERSION_AT]->(prev_c)
+                    WHERE old.hash <> item.hash
+                    FOREACH (_ IN CASE WHEN old IS NOT NULL THEN [1] ELSE [] END |
+                        CREATE (v)-[:PREVIOUS_VERSION]->(old)
+                    )
+                    """,
+                    repo_id=repo_id,
+                    commit_hash=commit_hash,
+                    author_email=commit_info['author_email'],
+                    author_name=commit_info['author_name'],
+                    rows=missing
+                ).consume()
+
+        return {
+            item['path']: {
+                'status': 'unchanged' if item['path'] in existing else 'new_version',
+                'hash': item['hash'],
+                'commit': commit_hash[:8]
+            }
+            for item in rows
+        }
     
     def _get_git_info(self, file_path: str) -> Optional[Dict]:
         """Extract git commit info for file"""
@@ -301,70 +386,103 @@ class VersionTracker:
                 else:
                     i += 1
             
-            # Process commits oldest to newest
-            versions_created = 0
-            for commit in reversed(commits):
-                # Create commit node
-                with self.graph_db.driver.session() as session:
+            # Prepare source-file history locally, then send it with UNWIND. This
+            # avoids a remote transaction for every commit and changed file.
+            supported_suffixes = {'.py', '.js', '.jsx', '.ts', '.tsx', '.java'}
+            excluded_parts = {'node_modules', 'venv', '.venv', '__pycache__',
+                              '.git', 'dist', 'build'}
+            ordered_commits = list(reversed(commits))
+            commit_rows = [
+                {
+                    'commit_hash': commit['hash'], 'message': commit['message'],
+                    'timestamp': commit['timestamp'], 'author': commit['author']
+                }
+                for commit in ordered_commits
+            ]
+            history_items = [
+                (commit, file_rel)
+                for commit in ordered_commits
+                for file_rel in commit['files']
+                if Path(file_rel).suffix.lower() in supported_suffixes
+                and (Path(repo_path) / file_rel).is_file()
+                and not any(part in excluded_parts for part in Path(file_rel).parts)
+            ]
+
+            version_rows = []
+            if history_items:
+                specs = [f"{commit['hash']}:{file_rel}" for commit, file_rel in history_items]
+                batch_result = subprocess.run(
+                    ['git', 'cat-file', '--batch'],
+                    input=('\n'.join(specs) + '\n').encode('utf-8'),
+                    capture_output=True, cwd=repo_path, timeout=60
+                )
+                if batch_result.returncode == 0:
+                    output = batch_result.stdout
+                    offset = 0
+                    for commit, file_rel in history_items:
+                        line_end = output.find(b'\n', offset)
+                        if line_end < 0:
+                            break
+                        header = output[offset:line_end]
+                        offset = line_end + 1
+                        if header.endswith(b' missing'):
+                            continue
+                        parts = header.rsplit(b' ', 2)
+                        if len(parts) != 3 or parts[1] != b'blob':
+                            continue
+                        size = int(parts[2])
+                        content = output[offset:offset + size]
+                        offset += size + 1  # cat-file adds a newline after the object
+                        version_rows.append({
+                            'file_path': str((Path(repo_path) / file_rel).resolve()),
+                            'hash': hashlib.sha256(content).hexdigest(),
+                            'commit_hash': commit['hash'],
+                            'timestamp': commit['timestamp'],
+                            'author': commit['author']
+                        })
+
+            with self.graph_db.driver.session() as session:
+                session.run("""
+                    MATCH (r:Repository {repo_id: $repo_id})
+                    UNWIND $rows AS item
+                    MERGE (u:User {user_id: item.author})
+                    SET u.email = item.author
+                    MERGE (c:Commit {
+                        repo_id: $repo_id,
+                        commit_hash: item.commit_hash
+                    })
+                    SET c.message = item.message,
+                        c.timestamp = datetime({epochSeconds: item.timestamp}),
+                        c.author_email = item.author
+                    MERGE (r)-[:HAS_COMMIT]->(c)
+                    MERGE (c)-[:AUTHORED_BY]->(u)
+                    """, repo_id=repo_id, rows=commit_rows).consume()
+
+                for rows in self.graph_db._chunks(version_rows, 2000):
                     session.run("""
                         MATCH (r:Repository {repo_id: $repo_id})
-                        MERGE (u:User {user_id: $author})
-                        SET u.email = $author
-                        
-                        MERGE (c:Commit {
+                        UNWIND $rows AS item
+                        MATCH (c:Commit {
                             repo_id: $repo_id,
-                            commit_hash: $commit_hash
+                            commit_hash: item.commit_hash
                         })
-                        SET c.message = $message,
-                            c.timestamp = datetime({epochSeconds: $timestamp}),
-                            c.author_email = $author
-                        
-                        MERGE (r)-[:HAS_COMMIT]->(c)
-                        MERGE (c)-[:AUTHORED_BY]->(u)
-                        """,
-                        repo_id=repo_id,
-                        commit_hash=commit['hash'],
-                        message=commit['message'],
-                        timestamp=commit['timestamp'],
-                        author=commit['author']
-                    )
-                
-                for file_rel in commit['files']:
-                    file_result = subprocess.run(
-                        ['git', 'show', f"{commit['hash']}:{file_rel}"],
-                        capture_output=True, cwd=repo_path, timeout=5
-                    )
-                    if file_result.returncode == 0:
-                        content_hash = hashlib.sha256(file_result.stdout).hexdigest()
-                        file_path = str(Path(repo_path) / file_rel)
-                        
-                        with self.graph_db.driver.session() as session:
-                            session.run("""
-                                MATCH (r:Repository {repo_id: $repo_id})
-                                MATCH (c:Commit {repo_id: $repo_id, commit_hash: $commit_hash})
-                                MERGE (u:User {user_id: $author})
-                                SET u.email = $author
-                                MERGE (f:File {file_path: $file_path})
-                                MERGE (r)-[:CONTAINS]->(f)
-                                
-                                CREATE (v:Version {
-                                    hash: $hash,
-                                    timestamp: datetime({epochSeconds: $timestamp}),
-                                    file_path: $file_path,
-                                    commit_hash: $commit_hash
-                                })
-                                CREATE (f)-[:HAS_VERSION]->(v)
-                                CREATE (v)-[:VERSION_AT]->(c)
-                                CREATE (v)-[:CREATED_BY]->(u)
-                                """,
-                                repo_id=repo_id,
-                                file_path=file_path,
-                                hash=content_hash,
-                                commit_hash=commit['hash'],
-                                timestamp=commit['timestamp'],
-                                author=commit['author']
-                            )
-                            versions_created += 1
+                        MERGE (u:User {user_id: item.author})
+                        SET u.email = item.author
+                        MATCH (f:File {path: item.file_path})
+                        SET f.file_path = item.file_path,
+                            f.path_normalized = replace(item.file_path, '\\\\', '/')
+                        MERGE (v:Version {
+                            file_path: item.file_path,
+                            hash: item.hash,
+                            commit_hash: item.commit_hash
+                        })
+                        ON CREATE SET v.timestamp = datetime({epochSeconds: item.timestamp})
+                        MERGE (f)-[:HAS_VERSION]->(v)
+                        MERGE (v)-[:VERSION_AT]->(c)
+                        MERGE (v)-[:CREATED_BY]->(u)
+                        """, repo_id=repo_id, rows=rows).consume()
+
+            versions_created = len(version_rows)
             
             # Link commit chain and version chain
             with self.graph_db.driver.session() as session:

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../services/api';
 import { formatFilePath } from '../utils/formatters';
+import SearchableTreeSelect from './SearchableTreeSelect';
 
 export default function ImpactAnalysis({ repoId }) {
   const [filePath, setFilePath] = useState('');
@@ -11,7 +12,11 @@ export default function ImpactAnalysis({ repoId }) {
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [error, setError] = useState(null);
 
-  useEffect(() => { loadFiles(); }, []);
+  useEffect(() => {
+    setFilePath('');
+    setImpact(null);
+    loadFiles();
+  }, [repoId]);
 
   const loadFiles = async () => {
     setLoadingFiles(true);
@@ -51,10 +56,14 @@ export default function ImpactAnalysis({ repoId }) {
 
       <div style={styles.inputSection}>
         <label style={styles.label}>Select File:</label>
-        <select value={filePath} onChange={(e) => setFilePath(e.target.value)} style={styles.select} disabled={loadingFiles}>
-          <option value="">{loadingFiles ? 'Loading files…' : 'Select a file'}</option>
-          {files.map((file, idx) => <option key={idx} value={file} title={file}>{formatFilePath(file, 3)}</option>)}
-        </select>
+        <SearchableTreeSelect
+          items={files.filter(Boolean).map(file => ({ value: file, label: formatFilePath(file, 1), path: file }))}
+          value={filePath}
+          onChange={setFilePath}
+          placeholder={loadingFiles ? 'Loading files…' : 'Select a file'}
+          searchPlaceholder="Search files or directories…"
+          disabled={loadingFiles}
+        />
         <label style={styles.label}>Change Type:</label>
         <div style={styles.changeTypeRow}>
           {['modify', 'delete', 'move'].map(type => (

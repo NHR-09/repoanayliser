@@ -20,6 +20,9 @@ jobs = {}
 class AnalysisRequest(BaseModel):
     repo_url: str
 
+class LocalAnalysisRequest(BaseModel):
+    local_path: str
+
 class ImpactRequest(BaseModel):
     file_path: str
     change_type: str = "modify"  # "delete", "modify", or "move"
@@ -41,6 +44,23 @@ def run_analysis(job_id: str, repo_url: str):
         print(f"{'='*60}\n")
         jobs[job_id] = {"status": "failed", "error": str(e), "trace": error_trace}
 
+def run_local_analysis(job_id: str, local_path: str):
+    try:
+        result = engine.analyze_local_path(local_path)
+        jobs[job_id] = {
+            "status": "completed",
+            "result": result,
+            "cached": result.get('cached', False)
+        }
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"\n{'='*60}")
+        print("ERROR IN LOCAL ANALYSIS:")
+        print(error_trace)
+        print(f"{'='*60}\n")
+        jobs[job_id] = {"status": "failed", "error": str(e), "trace": error_trace}
+
 @app.post("/analyze")
 async def analyze_repository(request: AnalysisRequest, background_tasks: BackgroundTasks):
     job_id = str(uuid.uuid4())
@@ -49,6 +69,41 @@ async def analyze_repository(request: AnalysisRequest, background_tasks: Backgro
     background_tasks.add_task(run_analysis, job_id, request.repo_url)
     
     return {"job_id": job_id, "status": "processing"}
+
+@app.get("/browse-folder")
+async def browse_folder():
+    """Open a native OS folder picker dialog and return the selected path."""
+    import subprocess, sys, json as _json
+    # Run tkinter in a subprocess to avoid mainloop conflicts with uvicorn
+    script = (
+        "import tkinter as tk, json, sys; "
+        "root = tk.Tk(); root.withdraw(); root.attributes('-topmost', True); "
+        "from tkinter import filedialog; "
+        "path = filedialog.askdirectory(title='Select Project Folder'); "
+        "root.destroy(); "
+        "print(json.dumps({'path': path or ''}))"
+    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True, text=True, timeout=120
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            data = _json.loads(result.stdout.strip())
+            return {"path": data.get("path", ""), "status": "ok"}
+        return {"path": "", "status": "cancelled"}
+    except Exception as e:
+        return {"path": "", "status": "error", "message": str(e)}
+
+@app.post("/analyze/local")
+async def analyze_local(request: LocalAnalysisRequest, background_tasks: BackgroundTasks):
+    job_id = str(uuid.uuid4())
+    jobs[job_id] = {"status": "processing"}
+    
+    background_tasks.add_task(run_local_analysis, job_id, request.local_path)
+    
+    return {"job_id": job_id, "status": "processing"}
+
 
 @app.get("/status/{job_id}")
 async def get_status(job_id: str):
@@ -153,9 +208,13 @@ async def get_blast_radius(file_path: str, change_type: str = "modify", repo_id:
     return result
 
 @app.get("/function/{function_name}")
-async def get_function_info(function_name: str):
+async def get_function_info(
+    function_name: str, repo_id: str = None, file_path: str = None
+):
     """Get function usage, callers, and LLM explanation"""
-    result = engine.analyze_function(function_name)
+    result = engine.analyze_function(
+        function_name, repo_id=repo_id, file_path=file_path
+    )
     return result
 
 @app.get("/repository/{repo_id}/snapshots")
@@ -429,14 +488,18 @@ async def get_function_graph(repo_id: str = None):
     return graph_data
 
 @app.get("/graph/function/{function_name}")
-async def get_function_call_chain(function_name: str, repo_id: str = None):
+async def get_function_call_chain(
+    function_name: str, repo_id: str = None, file_path: str = None
+):
     """Get call chain for a specific function"""
     # Use current repo if not specified
     if not repo_id and engine.current_repo_id:
         repo_id = engine.current_repo_id
     from src.graph.function_graph import FunctionGraphBuilder
     builder = FunctionGraphBuilder(engine.graph_db)
-    graph_data = builder.get_function_call_chain(function_name, repo_id=repo_id, depth=3)
+    graph_data = builder.get_function_call_chain(
+        function_name, repo_id=repo_id, file_path=file_path, depth=3
+    )
     return graph_data
 
 if __name__ == "__main__":

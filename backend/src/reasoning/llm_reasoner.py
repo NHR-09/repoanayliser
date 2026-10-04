@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Dict, List, Optional
 import os
 from groq import Groq
 from dotenv import load_dotenv
@@ -76,8 +76,25 @@ Provide a detailed micro-level analysis covering:
 Be concise and focus on the most important files."""
         return self._call_llm(prompt)
     
-    def explain_architecture_report(self, patterns_text: str, graph_context: str, top_dirs: str, evidence_text: str) -> Dict:
-        """Single consolidated architecture explanation — replaces 3 separate calls"""
+    def explain_architecture_report(
+        self,
+        patterns_text: str,
+        graph_context: str,
+        top_dirs: str,
+        evidence_text: str,
+        graphify_context: Optional[str] = None,
+    ) -> Dict:
+        """Single consolidated architecture explanation — replaces 3 separate calls.
+        
+        If graphify_context is provided (from GraphifyRetriever), it is injected
+        into the prompt so the LLM can cite actual function and class names.
+        """
+        graphify_section = (
+            f"\nStructural Knowledge Graph (functions, classes, call chains):\n{graphify_context}"
+            if graphify_context
+            else ""
+        )
+
         prompt = f"""You are analyzing a software repository. Based on the data below, provide a structured architecture report.
 
 Detected Patterns:
@@ -90,9 +107,10 @@ Directory Breakdown:
 {top_dirs}
 
 Code Evidence:
-{evidence_text}
+{evidence_text}{graphify_section}
 
-Respond with EXACTLY these 3 sections using the headers below. Keep each section to 3-5 sentences. Be specific and cite file names.
+Respond with EXACTLY these 3 sections using the headers below. Keep each section to 3-5 sentences.
+Be specific — cite actual function names, class names, and file names from the evidence above.
 
 ## Overview
 (Overall architecture style, main patterns, and system purpose)
@@ -177,6 +195,60 @@ Evidence:
 
 Explain what consequences this change may have. Cite specific files."""
     
+    def explain_impact_with_graph(
+        self,
+        file_path: str,
+        change_type: str,
+        direct: List[str],
+        indirect: List[str],
+        functions: List[Dict],
+        risk_level: str,
+        risk_score: int,
+        graphify_file_context: Optional[Dict] = None,
+    ) -> str:
+        """Generate a blast-radius impact explanation enriched with Graphify's
+        knowledge of actual functions and classes inside the changed file."""
+        from pathlib import Path
+
+        filename = Path(file_path).name
+        direct_list = "\n".join([f"  - {Path(f).name}" for f in direct[:10] if f]) or "  None"
+        indirect_list = "\n".join([f"  - {Path(f).name}" for f in indirect[:10] if f]) or "  None"
+        func_list = "\n".join([f"  - {fn['name']} ({fn['caller_count']} callers)" for fn in functions[:10]]) or "  None"
+
+        # Graphify structural enrichment
+        graphify_section = ""
+        if graphify_file_context:
+            gf_funcs = graphify_file_context.get("functions", [])
+            gf_classes = graphify_file_context.get("classes", [])
+            if gf_funcs or gf_classes:
+                graphify_section = "\nKnown symbols in this file (from knowledge graph):"
+                if gf_classes:
+                    graphify_section += f"\n  Classes: {', '.join(gf_classes[:8])}"
+                if gf_funcs:
+                    graphify_section += f"\n  Functions: {', '.join(gf_funcs[:12])}"
+
+        prompt = f"""Analyze the impact of {change_type.upper()}ing file: {filename}
+
+BLAST RADIUS ANALYSIS:
+
+Direct Dependents ({len(direct)} files):
+{direct_list}
+
+Indirect Dependents ({len(indirect)} files):
+{indirect_list}
+
+Functions Affected ({len(functions)} functions):
+{func_list}{graphify_section}
+
+Risk Assessment: {risk_level.upper()} (Score: {risk_score}/100)
+
+Provide a concise 2-3 sentence summary explaining:
+1. What components are directly impacted (cite actual function/class names if available)
+2. The cascading effects on the system
+3. Key risks to consider"""
+
+        return self._call_llm(prompt)
+
     def _build_function_prompt(self, function_name: str, function_info: Dict, callers: List[Dict], context: List[Dict], function_code: str = None) -> str:
         """Build prompt for function explanation"""
         caller_text = "\n".join([
@@ -202,16 +274,19 @@ Related code context:
 {context_text}
 
 Provide:
-1. Purpose of this function (based on actual code)
-2. How it's used in the codebase
-3. Impact if modified
-4. Key dependencies
+## 1. Purpose
+## 2. Usage in the codebase
+## 3. Impact of changes
+## 4. Key dependencies
 
-Be concise and cite specific files."""
+Return valid GitHub-flavored Markdown. Use the exact `##` headings above,
+normal bullet lists, fenced code blocks, and Markdown tables only when a table
+materially improves clarity. Do not escape Markdown punctuation such as pipes,
+backticks, asterisks, or hyphens. Be concise and cite specific files."""
     
     def _call_llm(self, prompt: str) -> str:
         response = self.client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=2000
@@ -220,7 +295,7 @@ Be concise and cite specific files."""
     
     def _call_llm_with_limit(self, prompt: str, max_tokens: int = 1200) -> str:
         response = self.client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+            model="openai/gpt-oss-120b",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=max_tokens
