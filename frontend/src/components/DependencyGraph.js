@@ -25,8 +25,9 @@ export default function DependencyGraph({ repoId }) {
 
   useEffect(() => {
     if (!loading && graphData && graphData.nodes && graphData.nodes.length > 0 && svgRef.current) {
-      renderGraph(graphData);
+      return renderGraph(graphData);
     }
+    return undefined;
   }, [graphData, loading]);
 
   const renderGraph = (data) => {
@@ -44,11 +45,21 @@ export default function DependencyGraph({ repoId }) {
     const nodes = (data.nodes || []).map(d => ({ ...d }));
     const edges = (data.edges || []).map(d => ({ ...d }));
 
+    const degree = new Map(nodes.map(node => [node.id, 0]));
+    edges.forEach(edge => {
+      degree.set(edge.source, (degree.get(edge.source) || 0) + 1);
+      degree.set(edge.target, (degree.get(edge.target) || 0) + 1);
+    });
+    const linkDistance = Math.min(105, 65 + Math.sqrt(nodes.length) * 3);
+    const baseCharge = Math.max(-230, -80 - nodes.length * 1.8);
+
     const simulation = d3.forceSimulation(nodes)
-      .force('link', d3.forceLink(edges).id(d => d.id).distance(100))
-      .force('charge', d3.forceManyBody().strength(-300))
+      .force('link', d3.forceLink(edges).id(d => d.id).distance(linkDistance).strength(0.7))
+      .force('charge', d3.forceManyBody().strength(d => (degree.get(d.id) || 0) === 0 ? -18 : baseCharge))
       .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collision', d3.forceCollide().radius(40));
+      .force('x', d3.forceX(width / 2).strength(0.035))
+      .force('y', d3.forceY(height / 2).strength(0.035))
+      .force('collision', d3.forceCollide().radius(30));
 
     const link = g.append('g')
       .selectAll('line')
@@ -163,7 +174,7 @@ export default function DependencyGraph({ repoId }) {
 
     svg.call(zoom);
 
-    setTimeout(() => {
+    const fitTimer = setTimeout(() => {
       try {
         const bounds = g.node().getBBox();
         const fullWidth = bounds.width;
@@ -172,7 +183,7 @@ export default function DependencyGraph({ repoId }) {
         const midY = bounds.y + fullHeight / 2;
 
         if (fullWidth > 0 && fullHeight > 0) {
-          const scale = 0.8 / Math.max(fullWidth / width, fullHeight / height);
+          const scale = Math.min(1.6, 0.78 / Math.max(fullWidth / width, fullHeight / height));
           const translate = [width / 2 - scale * midX, height / 2 - scale * midY];
 
           svg.transition().duration(750).call(
@@ -217,6 +228,11 @@ export default function DependencyGraph({ repoId }) {
       d.fx = null;
       d.fy = null;
     }
+
+    return () => {
+      clearTimeout(fitTimer);
+      simulation.stop();
+    };
   };
 
   if (loading) {

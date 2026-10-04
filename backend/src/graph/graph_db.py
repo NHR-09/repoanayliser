@@ -969,6 +969,139 @@ class GraphDB:
                         })
             
             return {'nodes': nodes, 'edges': edges}
+
+    def get_code_health_candidates(self, repo_id: str) -> Dict:
+        """Return static-analysis candidates that deserve a manual redundancy review.
+
+        An absent graph edge is evidence, not proof: framework entry points, reflection,
+        configuration files, and dynamically dispatched functions can appear unused.
+        The API therefore uses candidate language and includes confidence per item.
+        """
+        if not repo_id:
+            return {
+                'summary': {'files': 0, 'functions': 0, 'duplicate_files': 0, 'duplicate_groups': 0},
+                'file_candidates': [],
+                'function_candidates': [],
+                'duplicate_file_groups': [],
+                'duplicate_function_groups': [],
+                'caveat': 'Select a repository before running the code-health review.'
+            }
+
+        with self.driver.session() as session:
+            file_rows = session.run(
+                """
+                MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f:File)
+                OPTIONAL MATCH (r)-[:CONTAINS]->(incoming:File)-[:DEPENDS_ON]->(f)
+                OPTIONAL MATCH (f)-[:DEPENDS_ON]->(outgoing:File)<-[:CONTAINS]-(r)
+                WITH f, count(DISTINCT incoming) AS fan_in, count(DISTINCT outgoing) AS fan_out
+                WHERE fan_in = 0
+                RETURN COALESCE(f.file_path, f.path) AS file, fan_in, fan_out
+                ORDER BY fan_out ASC, file
+                LIMIT 250
+                """,
+                repo_id=repo_id
+            )
+
+            function_rows = session.run(
+                """
+                MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f:File)-[:CONTAINS]->(fn:Function)
+                OPTIONAL MATCH (r)-[:CONTAINS]->(:File)-[:CONTAINS]->(caller_fn:Function)-[:CALLS]->(fn)
+                OPTIONAL MATCH (r)-[:CONTAINS]->(caller_file:File)-[:CALLS]->(fn)
+                WITH f, fn, count(DISTINCT caller_fn) + count(DISTINCT caller_file) AS caller_count
+                WHERE caller_count = 0
+                RETURN fn.name AS name, COALESCE(fn.file, f.file_path, f.path) AS file,
+                       fn.line AS line, caller_count
+                ORDER BY file, line
+                LIMIT 500
+                """,
+                repo_id=repo_id
+            )
+
+            duplicate_rows = session.run(
+                """
+                MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f:File)-[:CONTAINS]->(fn:Function)
+                WITH fn.name AS name,
+                     collect(DISTINCT {file: COALESCE(fn.file, f.file_path, f.path), line: fn.line}) AS occurrences
+                WHERE size(occurrences) > 1
+                RETURN name, occurrences
+                ORDER BY size(occurrences) DESC, name
+                LIMIT 100
+                """,
+                repo_id=repo_id
+            )
+
+            duplicate_file_rows = session.run(
+                """
+                MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f:File)
+                WHERE f.content_hash IS NOT NULL AND f.content_hash <> ''
+                WITH f.content_hash AS content_hash,
+                     collect(DISTINCT COALESCE(f.file_path, f.path)) AS files
+                WHERE size(files) > 1
+                RETURN content_hash, files
+                ORDER BY size(files) DESC
+                LIMIT 100
+                """,
+                repo_id=repo_id
+            )
+
+            file_candidates = []
+            for row in file_rows:
+                path = row['file']
+                if not path:
+                    continue
+                isolated = row['fan_out'] == 0
+                file_candidates.append({
+                    'file': path,
+                    'fan_in': row['fan_in'],
+                    'fan_out': row['fan_out'],
+                    'kind': 'isolated' if isolated else 'unreferenced',
+                    'confidence': 0.72 if isolated else 0.52,
+                    'reason': (
+                        'No internal file imports this file, and it has no internal dependencies.'
+                        if isolated else
+                        'No internal file imports this file; it may be an entry point or dead module.'
+                    )
+                })
+
+            lifecycle_names = {
+                'main', 'run', 'start', 'setup', 'teardown', 'setUp', 'tearDown',
+                'render', 'register', 'configure', 'initialize', 'init'
+            }
+            function_candidates = []
+            for row in function_rows:
+                name = row['name'] or ''
+                if not name or name.startswith('__') or name.startswith('test') or name in lifecycle_names:
+                    continue
+                dynamic_shape = name.startswith(('on_', 'handle_', 'get_', 'post_', 'put_', 'delete_'))
+                function_candidates.append({
+                    'name': name,
+                    'file': row['file'],
+                    'line': row['line'],
+                    'confidence': 0.46 if dynamic_shape else 0.66,
+                    'reason': 'No statically resolved file or function call reaches this function.'
+                })
+                if len(function_candidates) >= 250:
+                    break
+
+            duplicate_groups = [dict(row) for row in duplicate_rows]
+            duplicate_file_groups = [dict(row) for row in duplicate_file_rows]
+
+        return {
+            'summary': {
+                'files': len(file_candidates),
+                'functions': len(function_candidates),
+                'duplicate_files': len(duplicate_file_groups),
+                'duplicate_groups': len(duplicate_groups)
+            },
+            'file_candidates': file_candidates,
+            'function_candidates': function_candidates,
+            'duplicate_file_groups': duplicate_file_groups,
+            'duplicate_function_groups': duplicate_groups,
+            'caveat': (
+                'These are review candidates from static dependency and call edges. '
+                'Framework routes, reflection, configuration entry points, and dynamic calls can create false positives.'
+            )
+        }
     
     def _normalize_path(self, path: str) -> str:
         """Normalize path for consistent matching"""

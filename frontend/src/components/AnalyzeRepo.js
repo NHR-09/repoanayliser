@@ -55,7 +55,7 @@ export default function AnalyzeRepo({ onAnalysisComplete }) {
         if (data.status === 'completed') {
           clearInterval(interval);
           setLoading(false);
-          onAnalysisComplete(data.result);
+          onAnalysisComplete(data.result, mode === 'local' ? localPath : repoUrl);
         } else if (data.status === 'failed') {
           clearInterval(interval);
           setLoading(false);

@@ -104,16 +104,25 @@ Directory Breakdown:
 Code Evidence:
 {evidence_text}{graphify_section}
 
-Respond with EXACTLY these 3 sections. Each section should be 4-6 sentences of genuine architectural insight.
+Respond with EXACTLY these 3 sections in concise, highly scannable Markdown. Do not write dense paragraphs. Keep every bullet to one or two sentences.
 
 ## Overview
-Explain the system's purpose and overall architecture. What problem does it solve? What architectural style does it follow and WHY is that a good/bad fit? What are the major subsystems and how do they relate? Reference detected patterns and explain their implications.
+Start with one short verdict sentence, followed by exactly these bullets:
+- **Purpose** — what problem the system solves.
+- **Architecture** — the dominant style and why it fits or does not fit.
+- **System flow** — one concrete end-to-end data/control path.
+- **Strength** — the most important maintainability or scalability benefit.
+- **Risk** — the most important architectural weakness.
 
 ## Modules
-For each major module/subsystem: What is its responsibility? What design decisions shape it (e.g., separation of concerns, encapsulation)? How do modules communicate — trace a specific data/control flow through the dependency edges. Identify any layering violations or tight coupling between modules that shouldn't be coupled.
+Use one bullet per major module in this form:
+- **Module name** — responsibility; main collaborators; important coupling or boundary concern.
+End with a single **Boundary warning** bullet only when the evidence shows a layering violation or tight coupling.
 
 ## Key Files
-Which files are architecturally critical and WHY? Don't just list hub files — explain their architectural ROLE: Are they orchestrators? Data gateways? Service facades? What risk do they pose (single points of failure, God objects)? What happens to the system if they are modified or removed?"""
+Use one bullet per critical file in this form:
+- `path/to/file` — architectural role; why changes are risky; main downstream effect.
+List no more than six files. Do not use a table."""
         
         response = self._execute_chat_completion(
             messages=[

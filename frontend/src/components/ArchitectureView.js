@@ -356,7 +356,19 @@ export default function ArchitectureView({ repoId }) {
 
   const formatMarkdown = (text) => {
     if (!text) return null;
-    return <MarkdownContent>{formatEvidenceText(text)}</MarkdownContent>;
+    const cleaned = formatEvidenceText(text);
+    const alreadyStructured = /^\s*[-*]\s+/m.test(cleaned) || /^#{1,4}\s+/m.test(cleaned);
+    if (alreadyStructured || cleaned.length < 320) {
+      return <MarkdownContent>{cleaned}</MarkdownContent>;
+    }
+
+    const sentences = (cleaned.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [])
+      .map(sentence => sentence.trim())
+      .filter(Boolean);
+    if (sentences.length < 4) return <MarkdownContent>{cleaned}</MarkdownContent>;
+
+    const scannable = `${sentences[0]}\n\n${sentences.slice(1).map(sentence => `- ${sentence}`).join('\n')}`;
+    return <MarkdownContent>{scannable}</MarkdownContent>;
   };
 
   return (
@@ -1018,6 +1030,8 @@ const s = {
     fontSize: '13.5px',
     color: '#cbd5e1',
     lineHeight: '1.7',
+    maxWidth: '76ch',
+    padding: '4px 18px 4px 0',
   },
   aiStackCol: {
     width: '210px',

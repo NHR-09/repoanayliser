@@ -11,6 +11,16 @@ import FunctionAnalysis from './components/FunctionAnalysis';
 import RepositoryManager from './components/RepositoryManager';
 import SnapshotComparison from './components/SnapshotComparison';
 import BlastRadius from './components/BlastRadius';
+import CodeHealth from './components/CodeHealth';
+
+const repositoryLabel = (result, source) => {
+  const explicit = result?.repo_name || result?.repository_name || result?.name;
+  if (explicit) return explicit;
+
+  const raw = source || result?.repo_url || result?.repo_path || '';
+  const normalized = String(raw).replace(/\\/g, '/').replace(/\/$/, '');
+  return normalized.split('/').filter(Boolean).pop()?.replace(/\.git$/i, '') || 'Current repository';
+};
 
 function App() {
   const [activeTab, setActiveTab] = useState('analyze');
@@ -19,10 +29,11 @@ function App() {
   const [currentRepoId, setCurrentRepoId] = useState(null);
   const [currentRepoName, setCurrentRepoName] = useState(null);
 
-  const handleAnalysisComplete = (result) => {
+  const handleAnalysisComplete = (result, source) => {
     setRefreshKey(prev => prev + 1);
     if (result?.repo_id) {
       setCurrentRepoId(result.repo_id);
+      setCurrentRepoName(repositoryLabel(result, source));
     }
     setActiveTab('patterns');
   };
@@ -69,6 +80,7 @@ function App() {
     { id: 'blast-radius', label: 'Blast', icon: '◎' },
     { id: 'impact', label: 'Impact', icon: '⚡' },
     { id: 'functions', label: 'Functions', icon: 'ƒ' },
+    { id: 'health', label: 'Unused', icon: '○' },
     { id: 'architecture', label: 'Architecture', icon: '△' },
     { id: 'graph', label: 'File Graph', icon: '⬢' },
     { id: 'function-graph', label: 'Fn Graph', icon: '⬣' },
@@ -122,6 +134,7 @@ function App() {
           {activeTab === 'blast-radius' && <BlastRadius key={refreshKey} repoId={currentRepoId} />}
           {activeTab === 'impact' && <ImpactAnalysis repoId={currentRepoId} />}
           {activeTab === 'functions' && <FunctionAnalysis key={refreshKey} repoId={currentRepoId} />}
+          {activeTab === 'health' && <CodeHealth key={refreshKey} repoId={currentRepoId} />}
           {activeTab === 'architecture' && <ArchitectureView key={refreshKey} repoId={currentRepoId} />}
           {activeTab === 'graph' && <DependencyGraph key={refreshKey} repoId={currentRepoId} />}
           {activeTab === 'function-graph' && <FunctionGraph key={refreshKey} repoId={currentRepoId} />}

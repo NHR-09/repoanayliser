@@ -165,6 +165,14 @@ async def get_confidence_report(repo_id: str = None):
     
     return analyzer.get_confidence_report()
 
+@app.get("/code-health")
+async def get_code_health(repo_id: str = None):
+    """List evidence-backed candidates for unused files/functions and duplicate names."""
+    selected_repo = repo_id or engine.current_repo_id
+    if not selected_repo:
+        return {"error": "No repository selected"}
+    return engine.graph_db.get_code_health_candidates(selected_repo)
+
 @app.post("/impact")
 async def analyze_impact(request: ImpactRequest):
     # Ensure current_repo_id is set

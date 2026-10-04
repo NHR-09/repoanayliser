@@ -22,7 +22,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 MAX_CACHE_SIZE = 100
-ARCHITECTURE_CACHE_VERSION = 2
+ARCHITECTURE_CACHE_VERSION = 3
 
 
 def _log_progress(current: int, total: int, label: str = "Processing"):

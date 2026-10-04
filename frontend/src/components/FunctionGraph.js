@@ -81,11 +81,22 @@ export default function FunctionGraph({ repoId }) {
     svg.attr('viewBox', `0 0 ${width} ${height}`).attr('height', height);
     const g = svg.append('g');
 
+    const degree = new Map(graphNodes.map(node => [node.id, 0]));
+    graphEdges.forEach(edge => {
+      degree.set(edge.source, (degree.get(edge.source) || 0) + 1);
+      degree.set(edge.target, (degree.get(edge.target) || 0) + 1);
+    });
+    const isTinyGraph = graphNodes.length <= 4;
+    const linkDistance = isTinyGraph ? 82 : Math.min(125, 76 + Math.sqrt(graphNodes.length) * 4);
+    const baseCharge = isTinyGraph ? -85 : Math.max(-260, -105 - graphNodes.length * 2.5);
+
     const simulation = d3.forceSimulation(graphNodes)
-      .force('link', d3.forceLink(graphEdges).id(d => d.id).distance(graphNodes.length <= 3 ? 190 : 150))
-      .force('charge', d3.forceManyBody().strength(-400))
+      .force('link', d3.forceLink(graphEdges).id(d => d.id).distance(linkDistance).strength(0.75))
+      .force('charge', d3.forceManyBody().strength(d => (degree.get(d.id) || 0) === 0 ? -25 : baseCharge))
       .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collision', d3.forceCollide().radius(50));
+      .force('x', d3.forceX(width / 2).strength(isTinyGraph ? 0.16 : 0.045))
+      .force('y', d3.forceY(height / 2).strength(isTinyGraph ? 0.16 : 0.045))
+      .force('collision', d3.forceCollide().radius(isTinyGraph ? 28 : 36));
 
     const defs = svg.append('defs');
     defs.append('marker')
@@ -226,7 +237,7 @@ export default function FunctionGraph({ repoId }) {
         const midX = bounds.x + fullWidth / 2;
         const midY = bounds.y + fullHeight / 2;
         if (fullWidth > 0 && fullHeight > 0) {
-          const scale = Math.min(2, 0.8 / Math.max(fullWidth / width, fullHeight / height));
+          const scale = Math.min(isTinyGraph ? 1.35 : 1.8, 0.78 / Math.max(fullWidth / width, fullHeight / height));
           const translate = [width / 2 - scale * midX, height / 2 - scale * midY];
           svg.transition().duration(750).call(
             zoom.transform,

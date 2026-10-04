@@ -25,6 +25,11 @@ class PatternDetector:
     def _get_directory(self, node: str) -> str:
         """Extract parent directory name from full path"""
         return Path(node).parent.name.lower() if node else ''
+
+    @staticmethod
+    def _component_paths(nodes) -> List[str]:
+        """Return stable component identities for the UI, not only aggregate counts."""
+        return sorted(str(node) for node in nodes)
     
     def _get_node_symbols(self, node: str) -> Dict:
         """Extract class names, function names, and imports from graph node data.
@@ -162,6 +167,11 @@ class PatternDetector:
                 'business': len(business),
                 'data': len(data)
             },
+            'layer_files': {
+                'presentation': self._component_paths(presentation),
+                'business': self._component_paths(business),
+                'data': self._component_paths(data)
+            },
             'valid_layering': valid_layering,
             'confidence': confidence
         }
@@ -219,6 +229,9 @@ class PatternDetector:
             'controllers': len(controllers),
             'models': len(models),
             'views': len(views),
+            'controller_files': self._component_paths(controllers),
+            'model_files': self._component_paths(models),
+            'view_files': self._component_paths(views),
             'controller_model_links': controller_model_links,
             'confidence': confidence
         }
@@ -264,6 +277,9 @@ class PatternDetector:
             'ports': len(ports),
             'adapters': len(adapters),
             'domain': len(domain),
+            'port_files': self._component_paths(ports),
+            'adapter_files': self._component_paths(adapters),
+            'domain_files': self._component_paths(domain),
             'domain_isolated': domain_isolated,
             'confidence': confidence
         }
@@ -313,6 +329,9 @@ class PatternDetector:
             'events': len(events),
             'publishers': len(publishers),
             'subscribers': len(subscribers),
+            'event_files': self._component_paths(events),
+            'publisher_files': self._component_paths(publishers),
+            'subscriber_files': self._component_paths(subscribers),
             'confidence': confidence
         }
 
@@ -379,6 +398,8 @@ class PatternDetector:
             'detected': has_pattern,
             'pipes': len(pipes),
             'filters': len(filters),
+            'pipe_files': self._component_paths(pipes),
+            'filter_files': self._component_paths(filters),
             'chain_links': chain_links,
             'confidence': confidence
         }
@@ -456,6 +477,8 @@ class PatternDetector:
             'detected': has_pattern,
             'servers': len(servers),
             'clients': len(clients),
+            'server_files': self._component_paths(servers),
+            'client_files': self._component_paths(clients),
             'communication_links': comm_links,
             'confidence': confidence
         }
@@ -517,6 +540,8 @@ class PatternDetector:
             'detected': has_pattern,
             'core_modules': len(core_modules),
             'plugins': len(plugins),
+            'core_module_files': self._component_paths(core_modules),
+            'plugin_files': self._component_paths(plugins),
             'core_plugin_links': core_plugin_links,
             'confidence': confidence
         }
@@ -579,6 +604,8 @@ class PatternDetector:
             'detected': has_pattern,
             'services': len(services),
             'gateways': len(gateways),
+            'service_files': self._component_paths(services),
+            'gateway_files': self._component_paths(gateways),
             'inter_service_links': inter_service_links,
             'confidence': confidence
         }

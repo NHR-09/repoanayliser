@@ -106,7 +106,10 @@ export const api = {
     axios.get(`${API_BASE}/repository/${repoId}/compare-snapshots/${snapshot1}/${snapshot2}`),
 
   getConfidenceReport: (repoId) =>
-    axios.get(`${API_BASE}/confidence-report`, { params: repoId ? { repo_id: repoId } : {} })
+    axios.get(`${API_BASE}/confidence-report`, { params: repoId ? { repo_id: repoId } : {} }),
+
+  getCodeHealth: (repoId) =>
+    axios.get(`${API_BASE}/code-health`, { params: repoId ? { repo_id: repoId } : {} })
 };
 
 export const getConfidenceReport = async (repoId) => {
