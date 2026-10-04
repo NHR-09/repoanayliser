@@ -10,279 +10,264 @@ class FunctionGraphBuilder:
     def get_function_graph_data(self, repo_id: str = None) -> Dict:
         """Get function nodes and call relationships for visualization"""
         with self.graph_db.driver.session() as session:
+            # 1. Fetch all functions in the repository/database
             if repo_id:
-                result = session.run(
+                func_records = session.run(
                     """
-                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(file:File)-[:CONTAINS]->(fn:Function)
-                    OPTIONAL MATCH (caller_file:File)-[:CALLS]->(fn)
-                    WHERE (r)-[:CONTAINS]->(caller_file)
-                    OPTIONAL MATCH (r)-[:CONTAINS]->(:File)-[:CONTAINS]->(caller_fn:Function)-[:CALLS]->(fn)
-                    OPTIONAL MATCH (fn)-[:CALLS]->(callee_fn:Function)<-[:CONTAINS]-(:File)<-[:CONTAINS]-(r)
-                    OPTIONAL MATCH (callee_fn)<-[:CONTAINS]-(callee_file:File)
-                    WITH fn, file,
-                         COLLECT(DISTINCT caller_file) as caller_files,
-                         COLLECT(DISTINCT caller_fn) as caller_functions,
-                         COLLECT(DISTINCT {func: callee_fn, file: callee_file}) as called_functions
+                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f:File)-[:CONTAINS]->(fn:Function)
                     RETURN fn.name as name, 
-                           COALESCE(file.path, file.file_path) as file, 
+                           COALESCE(f.path, f.file_path) as file, 
                            fn.line as line,
-                           [cf IN caller_files WHERE cf IS NOT NULL | COALESCE(cf.path, cf.file_path)] as file_callers,
-                           [cfn IN caller_functions WHERE cfn IS NOT NULL | {name: cfn.name, file: COALESCE(cfn.file, 'unknown')}] as function_callers,
-                           [cf IN called_functions WHERE cf.func IS NOT NULL | {name: cf.func.name, file: COALESCE(cf.func.file, COALESCE(cf.file.path, cf.file.file_path, 'unknown'))}] as function_callees
+                           fn.parent_class as parent_class
                     """,
                     repo_id=repo_id
                 )
             else:
-                result = session.run(
+                func_records = session.run(
                     """
-                    MATCH (file:File)-[:CONTAINS]->(fn:Function)
-                    OPTIONAL MATCH (caller_file:File)-[:CALLS]->(fn)
-                    OPTIONAL MATCH (:File)-[:CONTAINS]->(caller_fn:Function)-[:CALLS]->(fn)
-                    OPTIONAL MATCH (fn)-[:CALLS]->(callee_fn:Function)<-[:CONTAINS]-(callee_file:File)
-                    WITH fn, file,
-                         COLLECT(DISTINCT caller_file) as caller_files,
-                         COLLECT(DISTINCT caller_fn) as caller_functions,
-                         COLLECT(DISTINCT {func: callee_fn, file: callee_file}) as called_functions
+                    MATCH (f:File)-[:CONTAINS]->(fn:Function)
                     RETURN fn.name as name, 
-                           COALESCE(file.path, file.file_path) as file, 
+                           COALESCE(f.path, f.file_path) as file, 
                            fn.line as line,
-                           [cf IN caller_files WHERE cf IS NOT NULL | COALESCE(cf.path, cf.file_path)] as file_callers,
-                           [cfn IN caller_functions WHERE cfn IS NOT NULL | {name: cfn.name, file: COALESCE(cfn.file, 'unknown')}] as function_callers,
-                           [cf IN called_functions WHERE cf.func IS NOT NULL | {name: cf.func.name, file: COALESCE(cf.func.file, COALESCE(cf.file.path, cf.file.file_path, 'unknown'))}] as function_callees
+                           fn.parent_class as parent_class
                     """
                 )
+            
+            nodes = []
+            seen_nodes = set()
+            for r in func_records:
+                name = r['name']
+                file_path = r['file']
+                if not name or not file_path:
+                    continue
+                node_id = f"{file_path}::{name}"
+                if node_id not in seen_nodes:
+                    nodes.append({
+                        'id': node_id,
+                        'label': name,
+                        'file': file_path,
+                        'line': r['line'],
+                        'parent_class': r['parent_class'],
+                        'type': 'function'
+                    })
+                    seen_nodes.add(node_id)
+            
+            # 2. Fetch all function-to-function calls
+            if repo_id:
+                call_records = session.run(
+                    """
+                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f1:File)-[:CONTAINS]->(caller:Function)
+                    MATCH (caller)-[:CALLS]->(callee:Function)
+                    MATCH (r)-[:CONTAINS]->(f2:File)-[:CONTAINS]->(callee)
+                    RETURN caller.name as caller_name,
+                           COALESCE(f1.path, f1.file_path) as caller_file,
+                           callee.name as callee_name,
+                           COALESCE(f2.path, f2.file_path) as callee_file
+                    """,
+                    repo_id=repo_id
+                )
+            else:
+                call_records = session.run(
+                    """
+                    MATCH (f1:File)-[:CONTAINS]->(caller:Function)
+                    MATCH (caller)-[:CALLS]->(callee:Function)
+                    MATCH (f2:File)-[:CONTAINS]->(callee)
+                    RETURN caller.name as caller_name,
+                           COALESCE(f1.path, f1.file_path) as caller_file,
+                           callee.name as callee_name,
+                           COALESCE(f2.path, f2.file_path) as callee_file
+                    """
+                )
+            
+            edges = []
+            seen_edges = set()
+            for r in call_records:
+                caller_id = f"{r['caller_file']}::{r['caller_name']}"
+                callee_id = f"{r['callee_file']}::{r['callee_name']}"
+                
+                # Ensure both nodes exist
+                if caller_id in seen_nodes and callee_id in seen_nodes:
+                    edge_key = (caller_id, callee_id)
+                    if edge_key not in seen_edges:
+                        edges.append({
+                            'source': caller_id,
+                            'target': callee_id,
+                            'type': 'calls'
+                        })
+                        seen_edges.add(edge_key)
+
+            # 3. Optional fallback: If a function has no caller function and is called directly by a script file
+            if repo_id:
+                file_call_records = session.run(
+                    """
+                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(caller_file:File)-[:CALLS]->(callee:Function)
+                    MATCH (r)-[:CONTAINS]->(target_file:File)-[:CONTAINS]->(callee)
+                    WHERE NOT (:Function)-[:CALLS]->(callee)
+                    RETURN COALESCE(caller_file.path, caller_file.file_path) as caller_file,
+                           callee.name as callee_name,
+                           COALESCE(target_file.path, target_file.file_path) as target_file
+                    """,
+                    repo_id=repo_id
+                )
+            else:
+                file_call_records = session.run(
+                    """
+                    MATCH (caller_file:File)-[:CALLS]->(callee:Function)
+                    MATCH (target_file:File)-[:CONTAINS]->(callee)
+                    WHERE NOT (:Function)-[:CALLS]->(callee)
+                    RETURN COALESCE(caller_file.path, caller_file.file_path) as caller_file,
+                           callee.name as callee_name,
+                           COALESCE(target_file.path, target_file.file_path) as target_file
+                    """
+                )
+            
+            for r in file_call_records:
+                caller_path = r['caller_file']
+                callee_id = f"{r['target_file']}::{r['callee_name']}"
+                if caller_path and callee_id in seen_nodes:
+                    if caller_path not in seen_nodes:
+                        file_label = caller_path.replace('\\', '/').split('/')[-1]
+                        nodes.append({
+                            'id': caller_path,
+                            'label': file_label,
+                            'file': caller_path,
+                            'type': 'file'
+                        })
+                        seen_nodes.add(caller_path)
+                    edge_key = (caller_path, callee_id)
+                    if edge_key not in seen_edges:
+                        edges.append({
+                            'source': caller_path,
+                            'target': callee_id,
+                            'type': 'calls'
+                        })
+                        seen_edges.add(edge_key)
+
+            return {'nodes': nodes, 'edges': edges}
+    
+    def get_function_call_chain(
+        self, function_name: str, repo_id: str = None,
+        file_path: str = None, depth: int = 3
+    ) -> Dict:
+        """Get call chain for a specific function up to depth hops (both callers and callees)."""
+        with self.graph_db.driver.session() as session:
+            # First find the target function and its file
+            if repo_id:
+                target_rec = session.run(
+                    """
+                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f:File)-[:CONTAINS]->(fn:Function {name: $name})
+                    WHERE $file_path IS NULL OR fn.file = $file_path
+                       OR f.path = $file_path OR f.file_path = $file_path
+                    RETURN fn.name as name, COALESCE(f.path, f.file_path) as file, fn.line as line
+                    LIMIT 1
+                    """,
+                    repo_id=repo_id, name=function_name, file_path=file_path
+                ).single()
+            else:
+                target_rec = session.run(
+                    """
+                    MATCH (f:File)-[:CONTAINS]->(fn:Function {name: $name})
+                    WHERE $file_path IS NULL OR fn.file = $file_path
+                       OR f.path = $file_path OR f.file_path = $file_path
+                    RETURN fn.name as name, COALESCE(f.path, f.file_path) as file, fn.line as line
+                    LIMIT 1
+                    """,
+                    name=function_name, file_path=file_path
+                ).single()
+            
+            if not target_rec or not target_rec['file']:
+                return {'nodes': [], 'edges': []}
             
             nodes = []
             edges = []
             seen_nodes = set()
             seen_edges = set()
-            
-            for record in result:
-                func_name = record['name']
-                file_path = record['file']
-                
-                # Skip if function has no file (orphaned)
-                if not func_name or not file_path:
-                    logger.warning(f"Skipping orphaned function: {func_name} (no file)")
-                    continue
-                
-                node_id = f"{file_path}::{func_name}"
-                
-                if node_id not in seen_nodes:
-                    nodes.append({
-                        'id': node_id,
-                        'label': func_name,
-                        'file': file_path,
-                        'line': record['line'],
-                        'type': 'function'
-                    })
-                    seen_nodes.add(node_id)
-                
-                # File-to-function calls (incoming)
-                for caller_file in record['file_callers']:
-                    if caller_file:
-                        caller_id = caller_file
-                        if caller_id not in seen_nodes:
-                            file_label = caller_file.replace('\\', '/').split('/')[-1]
-                            nodes.append({
-                                'id': caller_id,
-                                'label': file_label,
-                                'file': caller_file,
-                                'type': 'file'
-                            })
-                            seen_nodes.add(caller_id)
-                        
-                        edge_key = (caller_id, node_id)
-                        if edge_key not in seen_edges:
-                            edges.append({
-                                'source': caller_id,
-                                'target': node_id,
-                                'type': 'calls'
-                            })
-                            seen_edges.add(edge_key)
-                
-                # Function-to-function calls (incoming — who calls this function)
-                for caller_fn in record['function_callers']:
-                    if caller_fn and caller_fn.get('name') and caller_fn.get('file'):
-                        caller_id = f"{caller_fn['file']}::{caller_fn['name']}"
-                        if caller_id not in seen_nodes:
-                            nodes.append({
-                                'id': caller_id,
-                                'label': caller_fn['name'],
-                                'file': caller_fn['file'],
-                                'type': 'function'
-                            })
-                            seen_nodes.add(caller_id)
-                        
-                        edge_key = (caller_id, node_id)
-                        if edge_key not in seen_edges:
-                            edges.append({
-                                'source': caller_id,
-                                'target': node_id,
-                                'type': 'calls'
-                            })
-                            seen_edges.add(edge_key)
-                
-                # Function-to-function calls (outgoing — what this function calls)
-                for callee_fn in record.get('function_callees', []):
-                    if callee_fn and callee_fn.get('name') and callee_fn.get('file'):
-                        callee_id = f"{callee_fn['file']}::{callee_fn['name']}"
-                        if callee_id not in seen_nodes:
-                            nodes.append({
-                                'id': callee_id,
-                                'label': callee_fn['name'],
-                                'file': callee_fn['file'],
-                                'type': 'function'
-                            })
-                            seen_nodes.add(callee_id)
-                        
-                        edge_key = (node_id, callee_id)
-                        if edge_key not in seen_edges:
-                            edges.append({
-                                'source': node_id,
-                                'target': callee_id,
-                                'type': 'calls'
-                            })
-                            seen_edges.add(edge_key)
-            
-            return {'nodes': nodes, 'edges': edges}
-    
-    def get_function_call_chain(
-        self,
-        function_name: str,
-        repo_id: str = None,
-        file_path: str = None,
-        depth: int = 3
-    ) -> Dict:
-        """Get the direct callers and callees of one exact function."""
-        del depth  # Reserved for a future multi-hop expansion.
 
-        with self.graph_db.driver.session() as session:
+            target_id = f"{target_rec['file']}::{target_rec['name']}"
+            nodes.append({
+                'id': target_id,
+                'label': target_rec['name'],
+                'file': target_rec['file'],
+                'line': target_rec['line'],
+                'type': 'function',
+                'focus': True
+            })
+            seen_nodes.add(target_id)
+
+            # Query all paths of depth 1..depth incoming and outgoing
             if repo_id:
-                result = session.run(
-                    """
-                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(file:File)-[:CONTAINS]->(target:Function {name: $name})
-                    WHERE $file_path IS NULL OR target.file = $file_path
-                       OR file.path = $file_path OR file.file_path = $file_path
-                    OPTIONAL MATCH (r)-[:CONTAINS]->(caller_file:File)-[:CONTAINS]->(caller_fn:Function)-[:CALLS]->(target)
-                    OPTIONAL MATCH (target)-[:CALLS]->(callee_fn:Function)<-[:CONTAINS]-(callee_file:File)<-[:CONTAINS]-(r)
-                    OPTIONAL MATCH (r)-[:CONTAINS]->(file_caller:File)-[:CALLS]->(target)
-                    RETURN target.name as name,
-                           target.line as line,
-                           COALESCE(file.file_path, file.path) as file,
-                           COLLECT(DISTINCT {
-                               name: caller_fn.name,
-                               file: COALESCE(caller_file.file_path, caller_file.path),
-                               line: caller_fn.line
-                           }) as callers,
-                           COLLECT(DISTINCT {
-                               name: callee_fn.name,
-                               file: COALESCE(callee_file.file_path, callee_file.path),
-                               line: callee_fn.line
-                           }) as callees,
-                           COLLECT(DISTINCT COALESCE(file_caller.file_path, file_caller.path)) as file_callers
-                    LIMIT 1
-                    """,
-                    repo_id=repo_id,
-                    name=function_name,
+                chain_query = f"""
+                MATCH (r:Repository {{repo_id: $repo_id}})-[:CONTAINS]->(tf:File)-[:CONTAINS]->(target:Function {{name: $name}})
+                WHERE $file_path IS NULL OR target.file = $file_path
+                   OR tf.path = $file_path OR tf.file_path = $file_path
+                OPTIONAL MATCH p_out = (target)-[:CALLS*1..{depth}]->(out_f:Function)
+                WHERE ALL(n IN nodes(p_out) WHERE (r)-[:CONTAINS]->(:File)-[:CONTAINS]->(n))
+                OPTIONAL MATCH p_in = (in_f:Function)-[:CALLS*1..{depth}]->(target)
+                WHERE ALL(n IN nodes(p_in) WHERE (r)-[:CONTAINS]->(:File)-[:CONTAINS]->(n))
+                WITH [p IN (collect(DISTINCT p_out) + collect(DISTINCT p_in)) WHERE p IS NOT NULL] AS paths
+                UNWIND paths AS p
+                UNWIND relationships(p) AS rel
+                WITH DISTINCT rel
+                MATCH (r:Repository {{repo_id: $repo_id}})-[:CONTAINS]->(f1:File)-[:CONTAINS]->(caller:Function) WHERE id(caller) = id(startNode(rel))
+                MATCH (r)-[:CONTAINS]->(f2:File)-[:CONTAINS]->(callee:Function) WHERE id(callee) = id(endNode(rel))
+                RETURN caller.name as caller_name, COALESCE(f1.path, f1.file_path) as caller_file, caller.line as caller_line,
+                       callee.name as callee_name, COALESCE(f2.path, f2.file_path) as callee_file, callee.line as callee_line
+                """
+                rels = session.run(
+                    chain_query, repo_id=repo_id, name=function_name,
                     file_path=file_path
                 )
             else:
-                result = session.run(
-                    """
-                    MATCH (file:File)-[:CONTAINS]->(target:Function {name: $name})
-                    WHERE $file_path IS NULL OR target.file = $file_path
-                       OR file.path = $file_path OR file.file_path = $file_path
-                    OPTIONAL MATCH (caller_file:File)-[:CONTAINS]->(caller_fn:Function)-[:CALLS]->(target)
-                    OPTIONAL MATCH (target)-[:CALLS]->(callee_fn:Function)<-[:CONTAINS]-(callee_file:File)
-                    OPTIONAL MATCH (file_caller:File)-[:CALLS]->(target)
-                    RETURN target.name as name,
-                           target.line as line,
-                           COALESCE(file.file_path, file.path) as file,
-                           COLLECT(DISTINCT {
-                               name: caller_fn.name,
-                               file: COALESCE(caller_file.file_path, caller_file.path),
-                               line: caller_fn.line
-                           }) as callers,
-                           COLLECT(DISTINCT {
-                               name: callee_fn.name,
-                               file: COALESCE(callee_file.file_path, callee_file.path),
-                               line: callee_fn.line
-                           }) as callees,
-                           COLLECT(DISTINCT COALESCE(file_caller.file_path, file_caller.path)) as file_callers
-                    LIMIT 1
-                    """,
-                    name=function_name,
-                    file_path=file_path
+                chain_query = f"""
+                MATCH (tf:File)-[:CONTAINS]->(target:Function {{name: $name}})
+                WHERE $file_path IS NULL OR target.file = $file_path
+                   OR tf.path = $file_path OR tf.file_path = $file_path
+                OPTIONAL MATCH p_out = (target)-[:CALLS*1..{depth}]->(out_f:Function)
+                OPTIONAL MATCH p_in = (in_f:Function)-[:CALLS*1..{depth}]->(target)
+                WITH [p IN (collect(DISTINCT p_out) + collect(DISTINCT p_in)) WHERE p IS NOT NULL] AS paths
+                UNWIND paths AS p
+                UNWIND relationships(p) AS rel
+                WITH DISTINCT rel
+                MATCH (f1:File)-[:CONTAINS]->(caller:Function) WHERE id(caller) = id(startNode(rel))
+                MATCH (f2:File)-[:CONTAINS]->(callee:Function) WHERE id(callee) = id(endNode(rel))
+                RETURN caller.name as caller_name, COALESCE(f1.path, f1.file_path) as caller_file, caller.line as caller_line,
+                       callee.name as callee_name, COALESCE(f2.path, f2.file_path) as callee_file, callee.line as callee_line
+                """
+                rels = session.run(
+                    chain_query, name=function_name, file_path=file_path
                 )
+            
+            for r in rels:
+                c_id = f"{r['caller_file']}::{r['caller_name']}"
+                ce_id = f"{r['callee_file']}::{r['callee_name']}"
 
-            record = result.single()
-            if not record or not record['file']:
-                return {'nodes': [], 'edges': []}
-
-            target_id = f"{record['file']}::{record['name']}"
-            nodes = [{
-                'id': target_id,
-                'label': record['name'],
-                'file': record['file'],
-                'line': record['line'],
-                'type': 'function',
-                'focus': True
-            }]
-            edges = []
-            seen_nodes = {target_id}
-            seen_edges = set()
-
-            def add_function(item, direction):
-                if not item or not item.get('name') or not item.get('file'):
-                    return
-                node_id = f"{item['file']}::{item['name']}"
-                if node_id not in seen_nodes:
+                if c_id not in seen_nodes:
                     nodes.append({
-                        'id': node_id,
-                        'label': item['name'],
-                        'file': item['file'],
-                        'line': item.get('line'),
+                        'id': c_id,
+                        'label': r['caller_name'],
+                        'file': r['caller_file'],
+                        'line': r['caller_line'],
                         'type': 'function'
                     })
-                    seen_nodes.add(node_id)
-                edge = (
-                    (node_id, target_id)
-                    if direction == 'caller'
-                    else (target_id, node_id)
-                )
-                if edge not in seen_edges:
-                    edges.append({
-                        'source': edge[0],
-                        'target': edge[1],
-                        'type': 'calls'
-                    })
-                    seen_edges.add(edge)
+                    seen_nodes.add(c_id)
 
-            for caller in record['callers']:
-                add_function(caller, 'caller')
-
-            for callee in record['callees']:
-                add_function(callee, 'callee')
-
-            for caller_path in record['file_callers']:
-                if not caller_path:
-                    continue
-                if caller_path not in seen_nodes:
+                if ce_id not in seen_nodes:
                     nodes.append({
-                        'id': caller_path,
-                        'label': caller_path.replace('\\', '/').split('/')[-1],
-                        'file': caller_path,
-                        'type': 'file'
+                        'id': ce_id,
+                        'label': r['callee_name'],
+                        'file': r['callee_file'],
+                        'line': r['callee_line'],
+                        'type': 'function'
                     })
-                    seen_nodes.add(caller_path)
-                edge = (caller_path, target_id)
-                if edge not in seen_edges:
+                    seen_nodes.add(ce_id)
+
+                edge_key = (c_id, ce_id)
+                if edge_key not in seen_edges:
                     edges.append({
-                        'source': caller_path,
-                        'target': target_id,
+                        'source': c_id,
+                        'target': ce_id,
                         'type': 'calls'
                     })
-                    seen_edges.add(edge)
+                    seen_edges.add(edge_key)
 
             return {'nodes': nodes, 'edges': edges}

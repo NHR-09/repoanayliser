@@ -675,7 +675,38 @@ class CouplingAnalyzer:
             fan_in = self.graph.in_degree(node)
             fan_out = self.graph.out_degree(node)
             if fan_in + fan_out > threshold:
-                high.append({'file': node, 'fan_in': fan_in, 'fan_out': fan_out})
+                incoming = list(self.graph.predecessors(node))
+                outgoing = list(self.graph.successors(node))
+                
+                # Separate internal files and external modules
+                incoming_files = [
+                    f for f in incoming 
+                    if self.graph.nodes[f].get('language') or ('\\' in f or '/' in f)
+                ]
+                outgoing_files = [
+                    f for f in outgoing 
+                    if self.graph.nodes[f].get('language') or ('\\' in f or '/' in f)
+                ]
+                external_modules = [
+                    f for f in outgoing 
+                    if not (self.graph.nodes[f].get('language') or ('\\' in f or '/' in f))
+                ]
+                
+                high.append({
+                    'file': node,
+                    'fan_in': fan_in,
+                    'fan_out': fan_out,
+                    'incoming': incoming,
+                    'outgoing': outgoing,
+                    'incoming_files': incoming_files,
+                    'outgoing_files': outgoing_files,
+                    'external_modules': external_modules
+                })
+        
+        # If threshold was too restrictive for small codebases, fall back to any connected files
+        if not high and threshold > 1:
+            return self._find_high_coupling(threshold=1)
+            
         return high
     
     def _detect_cycles(self) -> List[List[str]]:

@@ -35,7 +35,8 @@ class DependencyMapper:
                     imported_module,
                     Path(file_path),
                     source_paths,
-                    workspace_packages
+                    workspace_packages,
+                    repo_root
                 )
 
                 if target and str(target) != file_path:
@@ -103,7 +104,8 @@ class DependencyMapper:
         specifier: str,
         source_file: Path,
         source_paths: Set[Path],
-        workspace_packages: Dict[str, Path]
+        workspace_packages: Dict[str, Path],
+        repo_root: Optional[Path]
     ) -> Optional[Path]:
         specifier = specifier.split('?', 1)[0].replace('\\', '/')
 
@@ -129,6 +131,28 @@ class DependencyMapper:
                     if match:
                         return match
 
+        # Resolve repository-local absolute imports such as
+        # `from services.auth import ...` and `import src.config`.
+        if repo_root:
+            module_path = specifier.lstrip('.').replace('.', '/')
+            for candidate in (
+                repo_root / module_path,
+                repo_root / 'src' / module_path
+            ):
+                match = self._match_source_path(candidate.resolve(), source_paths)
+                if match:
+                    return match
+
+            normalized_module = module_path.casefold().strip('/')
+            for source_path in source_paths:
+                try:
+                    relative = source_path.relative_to(repo_root).as_posix()
+                except ValueError:
+                    continue
+                relative_without_ext = str(Path(relative).with_suffix('')).replace('\\', '/')
+                if relative_without_ext.casefold().endswith(normalized_module):
+                    return source_path
+
         return None
 
     @staticmethod
@@ -151,6 +175,7 @@ class DependencyMapper:
             candidate / f'index{ext}'
             for ext in ('.ts', '.tsx', '.js', '.jsx', '.py')
         )
+        candidates.append(candidate / '__init__.py')
         for path in candidates:
             resolved = path.resolve()
             if resolved in source_paths:
@@ -186,6 +211,8 @@ class DependencyMapper:
 
         affected = set()
         for node in self.graph.nodes():
+            if node == target_node or not self.graph.nodes[node].get('file'):
+                continue
             try:
                 if nx.has_path(self.graph, node, target_node):
                     path_length = nx.shortest_path_length(self.graph, node, target_node)

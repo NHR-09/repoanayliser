@@ -798,7 +798,7 @@ class AnalysisEngine:
             result = session.run("""
                 MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f:File)
                 OPTIONAL MATCH (f)-[:IMPORTS]->(m:Module)
-                OPTIONAL MATCH (f)-[:DEPENDS_ON]->(dep:File)
+                OPTIONAL MATCH (r)-[:CONTAINS]->(dep:File)<-[:DEPENDS_ON]-(f)
                 OPTIONAL MATCH (f)-[:CONTAINS]->(cls:Class)
                 OPTIONAL MATCH (f)-[:CONTAINS]->(fn:Function)
                 RETURN COALESCE(f.file_path, f.path) as file,
@@ -1144,7 +1144,17 @@ class AnalysisEngine:
         if imports:
             logger.info(f"   📦 Storing {len(imports)} imports for {parsed['file']}")
         for imp in imports:
-            self.graph_db.create_import_relationship(parsed['file'], imp)
+            self.graph_db.create_import_relationship(parsed['file'], imp, self.current_repo_id)
+        
+        # Store class method ownership (parent_class on Function nodes)
+        class_methods = parsed.get('class_methods', [])
+        if class_methods:
+            logger.debug(f"   🏛️ Storing {len(class_methods)} class-method ownerships for {Path(parsed['file']).name}")
+            for cm in class_methods:
+                self.graph_db.set_function_parent_class(
+                    parsed['file'], cm['method'], cm['class'], cm['line'],
+                    self.current_repo_id
+                )
     
     def _store_edges_in_graph(self, parsed: Dict):
         """Pass 2: Create function call edges AFTER all nodes exist.
@@ -1166,7 +1176,8 @@ class AnalysisEngine:
                     parsed['file'], 
                     call['caller'], 
                     call['callee'], 
-                    self.current_repo_id
+                    self.current_repo_id,
+                    caller_class=call.get('caller_class')
                 )
     
     
@@ -1703,5 +1714,7 @@ class AnalysisEngine:
             for source, target in self.dependency_mapper.graph.edges()
             if '\\' in target or '/' in target
         ]
-        edge_count = self.graph_db.bulk_create_dependencies(edges)
+        edge_count = self.graph_db.bulk_create_dependencies(
+            edges, repo_id=self.current_repo_id
+        )
         logger.info(f"   ✅ Stored {edge_count} DEPENDS_ON relationships in Neo4j")

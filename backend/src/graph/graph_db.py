@@ -123,45 +123,182 @@ class GraphDB:
             if not record:
                 logger.warning(f"⚠️  Skipped orphan function '{func_name}' — no File node for {normalized_path}")
     
-    def create_import_relationship(self, from_file: str, to_module: str):
-        # Normalize from_file path for matching
-        normalized_from = self._normalize_path(from_file)
+    def set_function_parent_class(self, file_path: str, func_name: str, class_name: str, line: int, repo_id: str = None):
+        """Set parent_class property on a Function node.
+        Uses line number for disambiguation when multiple classes have same method name."""
+        normalized = self._normalize_path(file_path)
         with self.driver.session() as session:
             session.run(
                 """
-                MATCH (f:File)
-                WHERE f.path = $from_file OR f.file_path = $from_file
-                MERGE (m:Module {name: $to_module})
-                MERGE (f)-[:IMPORTS]->(m)
+                MATCH (f:File)-[:CONTAINS]->(fn:Function {name: $func_name})
+                WHERE (f.path = $file_path OR f.file_path = $file_path)
+                  AND fn.line = $line
+                SET fn.parent_class = $class_name
                 """,
-                from_file=normalized_from, to_module=to_module
+                file_path=normalized, func_name=func_name,
+                class_name=class_name, line=line
             )
-            
-            # Build module path with both separators for cross-platform matching
-            module_parts_backslash = to_module.replace('.', '\\\\')
-            module_parts_forward = to_module.replace('.', '/')
-            module_name = to_module.split('.')[-1]
-            
-            session.run(
-                """
-                MATCH (f:File)
-                WHERE f.path = $from_file OR f.file_path = $from_file
-                MATCH (target:File)
-                WHERE target.path ENDS WITH $module_bs + '.py' 
-                   OR target.path ENDS WITH $module_bs + '.js'
-                   OR target.path ENDS WITH $module_fs + '.py'
-                   OR target.path ENDS WITH $module_fs + '.js'
-                   OR target.path ENDS WITH '\\\\' + $module_name + '.py'
-                   OR target.path ENDS WITH '\\\\' + $module_name + '.js'
-                   OR target.path ENDS WITH '/' + $module_name + '.py'
-                   OR target.path ENDS WITH '/' + $module_name + '.js'
-                MERGE (f)-[:DEPENDS_ON]->(target)
-                """,
-                from_file=normalized_from, 
-                module_bs=module_parts_backslash,
-                module_fs=module_parts_forward,
-                module_name=module_name
-            )
+    
+    def create_resolved_method_call(self, from_file: str, caller_class: str, caller_method: str,
+                                     target_class: str, target_method: str, repo_id: str = None):
+        """Create a CALLS edge between two class methods, resolved via self.X attribute types.
+        
+        Example: Kernel.request_seat -> ProcessManager.get_process
+        This creates the edge: (Function{name:request_seat, parent_class:Kernel})
+                              -[:CALLS {source: 'oop_resolution'}]->
+                               (Function{name:get_process, parent_class:ProcessManager})
+        """
+        normalized_from = self._normalize_path(from_file)
+        with self.driver.session() as session:
+            if repo_id:
+                result = session.run(
+                    """
+                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f1:File)-[:CONTAINS]->(caller:Function)
+                    WHERE (f1.path = $from_file OR f1.file_path = $from_file)
+                      AND caller.name = $caller_method
+                      AND caller.parent_class = $caller_class
+                    MATCH (r)-[:CONTAINS]->(:File)-[:CONTAINS]->(callee:Function)
+                    WHERE callee.name = $target_method
+                      AND callee.parent_class = $target_class
+                    MERGE (caller)-[:CALLS {source: 'oop_resolution'}]->(callee)
+                    RETURN count(callee) as matched
+                    """,
+                    repo_id=repo_id,
+                    from_file=normalized_from,
+                    caller_class=caller_class,
+                    caller_method=caller_method,
+                    target_class=target_class,
+                    target_method=target_method
+                )
+            else:
+                result = session.run(
+                    """
+                    MATCH (f1:File)-[:CONTAINS]->(caller:Function)
+                    WHERE (f1.path = $from_file OR f1.file_path = $from_file)
+                      AND caller.name = $caller_method
+                      AND caller.parent_class = $caller_class
+                    MATCH (:File)-[:CONTAINS]->(callee:Function)
+                    WHERE callee.name = $target_method
+                      AND callee.parent_class = $target_class
+                    MERGE (caller)-[:CALLS {source: 'oop_resolution'}]->(callee)
+                    RETURN count(callee) as matched
+                    """,
+                    from_file=normalized_from,
+                    caller_class=caller_class,
+                    caller_method=caller_method,
+                    target_class=target_class,
+                    target_method=target_method
+                )
+            record = result.single()
+            if record and record['matched'] > 0:
+                logger.debug(f"✓ OOP CALLS: {caller_class}.{caller_method} -> {target_class}.{target_method}")
+    
+    def create_import_relationship(self, from_file: str, to_module: str, repo_id: str = None):
+        # Normalize from_file path for matching
+        normalized_from = self._normalize_path(from_file)
+        
+        # Build module path with both separators for cross-platform matching
+        module_parts_backslash = to_module.replace('.', '\\\\')
+        module_parts_forward = to_module.replace('.', '/')
+        module_name = to_module.split('.')[-1]
+
+        with self.driver.session() as session:
+            if repo_id:
+                session.run(
+                    """
+                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f:File)
+                    WHERE f.path = $from_file OR f.file_path = $from_file
+                    MERGE (m:Module {name: $to_module})
+                    MERGE (f)-[:IMPORTS]->(m)
+                    """,
+                    repo_id=repo_id, from_file=normalized_from, to_module=to_module
+                )
+                
+                session.run(
+                    """
+                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f:File)
+                    WHERE f.path = $from_file OR f.file_path = $from_file
+                    MATCH (r)-[:CONTAINS]->(target:File)
+                    WHERE target <> f AND (
+                          target.path ENDS WITH $module_bs + '.py' 
+                       OR target.path ENDS WITH $module_bs + '.js'
+                       OR target.path ENDS WITH $module_fs + '.py'
+                       OR target.path ENDS WITH $module_fs + '.js'
+                       OR target.file_path ENDS WITH $module_bs + '.py' 
+                       OR target.file_path ENDS WITH $module_bs + '.js'
+                       OR target.file_path ENDS WITH $module_fs + '.py'
+                       OR target.file_path ENDS WITH $module_fs + '.js'
+                       OR target.path_normalized ENDS WITH '/' + $module_fs + '.py'
+                       OR target.path_normalized ENDS WITH '/' + $module_fs + '.js'
+                       OR target.path_normalized ENDS WITH '/' + $module_name + '.py'
+                       OR target.path_normalized ENDS WITH '/' + $module_name + '.js'
+                    )
+                    WITH f, target,
+                         CASE 
+                            WHEN target.path_normalized ENDS WITH '/' + $module_fs + '.py' THEN 1
+                            WHEN target.path_normalized ENDS WITH '/' + $module_fs + '.js' THEN 1
+                            WHEN target.path ENDS WITH $module_fs + '.py' THEN 2
+                            WHEN target.path ENDS WITH $module_fs + '.js' THEN 2
+                            ELSE 3
+                         END AS priority
+                    ORDER BY priority ASC
+                    WITH f, head(collect(target)) AS best_target
+                    WHERE best_target IS NOT NULL
+                    MERGE (f)-[:DEPENDS_ON]->(best_target)
+                    """,
+                    repo_id=repo_id,
+                    from_file=normalized_from, 
+                    module_bs=module_parts_backslash,
+                    module_fs=module_parts_forward,
+                    module_name=module_name
+                )
+            else:
+                session.run(
+                    """
+                    MATCH (f:File)
+                    WHERE f.path = $from_file OR f.file_path = $from_file
+                    MERGE (m:Module {name: $to_module})
+                    MERGE (f)-[:IMPORTS]->(m)
+                    """,
+                    from_file=normalized_from, to_module=to_module
+                )
+                session.run(
+                    """
+                    MATCH (f:File)
+                    WHERE f.path = $from_file OR f.file_path = $from_file
+                    MATCH (target:File)
+                    WHERE target <> f AND (
+                          target.path ENDS WITH $module_bs + '.py' 
+                       OR target.path ENDS WITH $module_bs + '.js'
+                       OR target.path ENDS WITH $module_fs + '.py'
+                       OR target.path ENDS WITH $module_fs + '.js'
+                       OR target.file_path ENDS WITH $module_bs + '.py' 
+                       OR target.file_path ENDS WITH $module_bs + '.js'
+                       OR target.file_path ENDS WITH $module_fs + '.py'
+                       OR target.file_path ENDS WITH $module_fs + '.js'
+                       OR target.path_normalized ENDS WITH '/' + $module_fs + '.py'
+                       OR target.path_normalized ENDS WITH '/' + $module_fs + '.js'
+                       OR target.path_normalized ENDS WITH '/' + $module_name + '.py'
+                       OR target.path_normalized ENDS WITH '/' + $module_name + '.js'
+                    )
+                    WITH f, target,
+                         CASE 
+                            WHEN target.path_normalized ENDS WITH '/' + $module_fs + '.py' THEN 1
+                            WHEN target.path_normalized ENDS WITH '/' + $module_fs + '.js' THEN 1
+                            WHEN target.path ENDS WITH $module_fs + '.py' THEN 2
+                            WHEN target.path ENDS WITH $module_fs + '.js' THEN 2
+                            ELSE 3
+                         END AS priority
+                    ORDER BY priority ASC
+                    WITH f, head(collect(target)) AS best_target
+                    WHERE best_target IS NOT NULL
+                    MERGE (f)-[:DEPENDS_ON]->(best_target)
+                    """,
+                    from_file=normalized_from, 
+                    module_bs=module_parts_backslash,
+                    module_fs=module_parts_forward,
+                    module_name=module_name
+                )
     
     def create_function_call(self, from_file: str, called_function: str, repo_id: str = None):
         """Create CALLS relationship between file and function within same repository"""
@@ -199,9 +336,12 @@ class GraphDB:
                 if record and record['matched'] > 0:
                     logger.debug(f"✓ CALLS: {Path(from_file).name} -> {called_function}")
     
-    def create_function_to_function_call(self, from_file: str, caller_func: str, callee_func: str, repo_id: str = None):
+    def create_function_to_function_call(self, from_file: str, caller_func: str, callee_func: str, repo_id: str = None, caller_class: str = None):
         """Create CALLS relationship between two functions.
-        Both caller and callee must already exist as nodes connected to a File.
+        Prioritizes callee resolution in order:
+        1. Same file (local function)
+        2. Dependent/imported file (imported function)
+        3. Repository-wide function
         """
         normalized_from = self._normalize_path(from_file)
         with self.driver.session() as session:
@@ -211,33 +351,49 @@ class GraphDB:
                     MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f:File)
                     WHERE f.path = $from_file OR f.file_path = $from_file
                     MATCH (f)-[:CONTAINS]->(caller:Function {name: $caller_func})
-                    MATCH (r)-[:CONTAINS]->(:File)-[:CONTAINS]->(callee:Function {name: $callee_func})
-                    MERGE (caller)-[:CALLS]->(callee)
-                    RETURN count(callee) as matched
+                    WHERE ($caller_class IS NULL OR caller.parent_class = $caller_class OR caller.parent_class IS NULL)
+                    
+                    OPTIONAL MATCH (f)-[:CONTAINS]->(same_callee:Function {name: $callee_func})
+                    OPTIONAL MATCH (f)-[:DEPENDS_ON]->(:File)-[:CONTAINS]->(dep_callee:Function {name: $callee_func})
+                    OPTIONAL MATCH (r)-[:CONTAINS]->(:File)-[:CONTAINS]->(repo_callee:Function {name: $callee_func})
+                    
+                    WITH caller, COALESCE(same_callee, dep_callee, repo_callee) AS chosen_callee
+                    WHERE chosen_callee IS NOT NULL
+                    WITH caller, head(collect(DISTINCT chosen_callee)) AS target_callee
+                    MERGE (caller)-[:CALLS]->(target_callee)
+                    RETURN count(target_callee) as matched
                     """,
                     repo_id=repo_id,
                     from_file=normalized_from,
                     caller_func=caller_func,
-                    callee_func=callee_func
+                    callee_func=callee_func,
+                    caller_class=caller_class
                 )
                 record = result.single()
                 if record and record['matched'] > 0:
                     logger.debug(f"✓ {caller_func} -> {callee_func}")
             else:
-                # Non-repo mode: require callee to be contained in SOME file
-                # (prevents creating edges to orphaned/global function nodes)
                 result = session.run(
                     """
                     MATCH (f:File)
                     WHERE f.path = $from_file OR f.file_path = $from_file
                     MATCH (f)-[:CONTAINS]->(caller:Function {name: $caller_func})
-                    MATCH (:File)-[:CONTAINS]->(callee:Function {name: $callee_func})
-                    MERGE (caller)-[:CALLS]->(callee)
-                    RETURN count(callee) as matched
+                    WHERE ($caller_class IS NULL OR caller.parent_class = $caller_class OR caller.parent_class IS NULL)
+                    
+                    OPTIONAL MATCH (f)-[:CONTAINS]->(same_callee:Function {name: $callee_func})
+                    OPTIONAL MATCH (f)-[:DEPENDS_ON]->(:File)-[:CONTAINS]->(dep_callee:Function {name: $callee_func})
+                    OPTIONAL MATCH (:File)-[:CONTAINS]->(repo_callee:Function {name: $callee_func})
+                    
+                    WITH caller, COALESCE(same_callee, dep_callee, repo_callee) AS chosen_callee
+                    WHERE chosen_callee IS NOT NULL
+                    WITH caller, head(collect(DISTINCT chosen_callee)) AS target_callee
+                    MERGE (caller)-[:CALLS]->(target_callee)
+                    RETURN count(target_callee) as matched
                     """,
                     from_file=normalized_from,
                     caller_func=caller_func,
-                    callee_func=callee_func
+                    callee_func=callee_func,
+                    caller_class=caller_class
                 )
                 record = result.single()
                 if record and record['matched'] > 0:
@@ -290,7 +446,8 @@ class GraphDB:
             function_calls.extend({
                 'file': file_path,
                 'caller': call.get('caller'),
-                'callee': call.get('callee')
+                'callee': call.get('callee'),
+                'caller_class': call.get('caller_class')
             } for call in parsed.get('function_to_function_calls', [])
               if call.get('caller') and call.get('callee'))
             attribute_types = {
@@ -348,7 +505,15 @@ class GraphDB:
                 MATCH (r:Repository {repo_id: $repo_id})
                 UNWIND $rows AS item
                 MATCH (r)-[:CONTAINS]->(source:File {path: item.file})
-                MATCH (r)-[:CONTAINS]->(:File)-[:CONTAINS]->(callee:Function {name: item.callee})
+                OPTIONAL MATCH (source)-[:CONTAINS]->(same:Function {name: item.callee})
+                OPTIONAL MATCH (source)-[:DEPENDS_ON]->(:File)-[:CONTAINS]->(dep:Function {name: item.callee})
+                OPTIONAL MATCH (r)-[:CONTAINS]->(:File)-[:CONTAINS]->(fallback:Function {name: item.callee})
+                WITH source, item,
+                     head(collect(DISTINCT same)) AS same_callee,
+                     head(collect(DISTINCT dep)) AS dep_callee,
+                     head(collect(DISTINCT fallback)) AS repo_callee
+                WITH source, COALESCE(same_callee, dep_callee, repo_callee) AS callee
+                WHERE callee IS NOT NULL
                 MERGE (source)-[:CALLS]->(callee)
             """),
             (function_calls, """
@@ -356,7 +521,18 @@ class GraphDB:
                 UNWIND $rows AS item
                 MATCH (r)-[:CONTAINS]->(source:File {path: item.file})
                 MATCH (source)-[:CONTAINS]->(caller:Function {name: item.caller})
-                MATCH (r)-[:CONTAINS]->(:File)-[:CONTAINS]->(callee:Function {name: item.callee})
+                WHERE item.caller_class IS NULL
+                   OR caller.parent_class = item.caller_class
+                   OR caller.parent_class IS NULL
+                OPTIONAL MATCH (source)-[:CONTAINS]->(same:Function {name: item.callee})
+                OPTIONAL MATCH (source)-[:DEPENDS_ON]->(:File)-[:CONTAINS]->(dep:Function {name: item.callee})
+                OPTIONAL MATCH (r)-[:CONTAINS]->(:File)-[:CONTAINS]->(fallback:Function {name: item.callee})
+                WITH caller, item,
+                     head(collect(DISTINCT same)) AS same_callee,
+                     head(collect(DISTINCT dep)) AS dep_callee,
+                     head(collect(DISTINCT fallback)) AS repo_callee
+                WITH caller, COALESCE(same_callee, dep_callee, repo_callee) AS callee
+                WHERE callee IS NOT NULL
                 MERGE (caller)-[:CALLS]->(callee)
             """),
             (resolved_method_calls, """
@@ -392,6 +568,7 @@ class GraphDB:
         }
 
     def bulk_create_dependencies(self, edges, source: str = None,
+                                 repo_id: str = None,
                                  batch_size: int = None) -> int:
         """Create file dependency edges with batched UNWIND queries."""
         batch_size = batch_size or self.BULK_BATCH_SIZE
@@ -411,14 +588,15 @@ class GraphDB:
                 'source_tag': source
             })
 
-        query = """
+        scoped_query = """
+            MATCH (r:Repository {repo_id: $repo_id})
             UNWIND $rows AS item
-            MATCH (f1:File)
+            MATCH (r)-[:CONTAINS]->(f1:File)
             WHERE f1.path = item.source OR f1.file_path = item.source
                OR f1.path ENDS WITH '\\\\' + item.source_name
                OR f1.path ENDS WITH '/' + item.source_name
-            WITH item, f1
-            MATCH (f2:File)
+            WITH item, r, f1
+            MATCH (r)-[:CONTAINS]->(f2:File)
             WHERE f2.path = item.target OR f2.file_path = item.target
                OR f2.path ENDS WITH '\\\\' + item.target_name
                OR f2.path ENDS WITH '/' + item.target_name
@@ -429,9 +607,13 @@ class GraphDB:
                 SET rel.source = item.source_tag
             )
         """
+        unscoped_query = scoped_query.replace(
+            "MATCH (r:Repository {repo_id: $repo_id})\n", ""
+        ).replace("(r)-[:CONTAINS]->", "").replace("WITH item, r, f1", "WITH item, f1")
+        query = scoped_query if repo_id else unscoped_query
         with self.driver.session() as session:
             for chunk in self._chunks(rows, batch_size):
-                session.run(query, rows=chunk).consume()
+                session.run(query, rows=chunk, repo_id=repo_id).consume()
         return len(rows)
 
     def create_transitive_function_calls(self, repo_id: str = None):
@@ -462,46 +644,79 @@ class GraphDB:
                 record = result.single()
                 return record['created'] if record else 0
     
-    def get_dependencies(self, file_path: str) -> List[str]:
+    def get_dependencies(self, file_path: str, repo_id: str = None) -> List[str]:
         normalized = self._normalize_path(file_path)
         suffix = self._get_path_suffix(file_path)
         suffix_fwd = suffix.replace('\\', '/')
         with self.driver.session() as session:
-            result = session.run(
-                """
-                MATCH (f:File)
-                WHERE f.path = $path OR f.file_path = $path
-                   OR f.path ENDS WITH $suffix OR f.path ENDS WITH $suffix_fwd
-                   OR f.path_normalized ENDS WITH $suffix_fwd
-                OPTIONAL MATCH (f)-[:IMPORTS]->(m:Module)
-                OPTIONAL MATCH (f)-[:DEPENDS_ON]->(dep:File)
-                RETURN COLLECT(DISTINCT m.name) + COLLECT(DISTINCT dep.path) as dependencies
-                """,
-                path=normalized,
-                suffix=suffix,
-                suffix_fwd=suffix_fwd
-            )
+            if repo_id:
+                result = session.run(
+                    """
+                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f:File)
+                    WHERE f.path = $path OR f.file_path = $path
+                       OR f.path ENDS WITH $suffix OR f.path ENDS WITH $suffix_fwd
+                       OR f.path_normalized ENDS WITH $suffix_fwd
+                    OPTIONAL MATCH (f)-[:IMPORTS]->(m:Module)
+                    OPTIONAL MATCH (r)-[:CONTAINS]->(dep:File)<-[:DEPENDS_ON]-(f)
+                    RETURN COLLECT(DISTINCT m.name) + COLLECT(DISTINCT COALESCE(dep.file_path, dep.path)) as dependencies
+                    """,
+                    repo_id=repo_id,
+                    path=normalized,
+                    suffix=suffix,
+                    suffix_fwd=suffix_fwd
+                )
+            else:
+                result = session.run(
+                    """
+                    MATCH (f:File)
+                    WHERE f.path = $path OR f.file_path = $path
+                       OR f.path ENDS WITH $suffix OR f.path ENDS WITH $suffix_fwd
+                       OR f.path_normalized ENDS WITH $suffix_fwd
+                    OPTIONAL MATCH (f)-[:IMPORTS]->(m:Module)
+                    OPTIONAL MATCH (f)-[:DEPENDS_ON]->(dep:File)
+                    RETURN COLLECT(DISTINCT m.name) + COLLECT(DISTINCT COALESCE(dep.file_path, dep.path)) as dependencies
+                    """,
+                    path=normalized,
+                    suffix=suffix,
+                    suffix_fwd=suffix_fwd
+                )
             record = result.single()
             return [d for d in record["dependencies"] if d] if record else []
     
-    def get_affected_files(self, file_path: str) -> List[str]:
+    def get_affected_files(self, file_path: str, repo_id: str = None) -> List[str]:
         normalized = self._normalize_path(file_path)
         suffix = self._get_path_suffix(file_path)
         suffix_fwd = suffix.replace('\\', '/')
         with self.driver.session() as session:
-            result = session.run(
-                """
-                MATCH (target:File)
-                WHERE target.path = $path OR target.file_path = $path
-                   OR target.path ENDS WITH $suffix OR target.path ENDS WITH $suffix_fwd
-                   OR target.path_normalized ENDS WITH $suffix_fwd
-                MATCH (f:File)-[:DEPENDS_ON|IMPORTS*1..3]->(target)
-                RETURN DISTINCT f.path as path
-                """,
-                path=normalized,
-                suffix=suffix,
-                suffix_fwd=suffix_fwd
-            )
+            if repo_id:
+                result = session.run(
+                    """
+                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(target:File)
+                    WHERE target.path = $path OR target.file_path = $path
+                       OR target.path ENDS WITH $suffix OR target.path ENDS WITH $suffix_fwd
+                       OR target.path_normalized ENDS WITH $suffix_fwd
+                    MATCH (r)-[:CONTAINS]->(f:File)-[:DEPENDS_ON|IMPORTS*1..3]->(target)
+                    RETURN DISTINCT COALESCE(f.file_path, f.path) as path
+                    """,
+                    repo_id=repo_id,
+                    path=normalized,
+                    suffix=suffix,
+                    suffix_fwd=suffix_fwd
+                )
+            else:
+                result = session.run(
+                    """
+                    MATCH (target:File)
+                    WHERE target.path = $path OR target.file_path = $path
+                       OR target.path ENDS WITH $suffix OR target.path ENDS WITH $suffix_fwd
+                       OR target.path_normalized ENDS WITH $suffix_fwd
+                    MATCH (f:File)-[:DEPENDS_ON|IMPORTS*1..3]->(target)
+                    RETURN DISTINCT COALESCE(f.file_path, f.path) as path
+                    """,
+                    path=normalized,
+                    suffix=suffix,
+                    suffix_fwd=suffix_fwd
+                )
             return [record["path"] for record in result]
     
     def debug_file(self, file_path: str) -> Dict:
@@ -693,10 +908,12 @@ class GraphDB:
                 result = session.run(
                     """
                     MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f:File)
-                    OPTIONAL MATCH (f)-[rel:DEPENDS_ON|IMPORTS]->(target:File)
+                    OPTIONAL MATCH (f)-[rel:DEPENDS_ON]->(target:File)
                     WHERE (r)-[:CONTAINS]->(target)
-                    WITH f, COLLECT({target: target.path, type: type(rel)}) as relationships
-                    RETURN f.path as id, f.path as label, relationships
+                    WITH f, COLLECT(DISTINCT {target: COALESCE(target.file_path, target.path), type: type(rel)}) as relationships
+                    RETURN COALESCE(f.file_path, f.path) as id, 
+                           COALESCE(f.file_path, f.path) as label, 
+                           relationships
                     """,
                     repo_id=repo_id
                 )
@@ -704,9 +921,11 @@ class GraphDB:
                 result = session.run(
                     """
                     MATCH (f:File)
-                    OPTIONAL MATCH (f)-[r:DEPENDS_ON|IMPORTS]->(target:File)
-                    WITH f, COLLECT({target: target.path, type: type(r)}) as relationships
-                    RETURN f.path as id, f.path as label, relationships
+                    OPTIONAL MATCH (f)-[rel:DEPENDS_ON]->(target:File)
+                    WITH f, COLLECT(DISTINCT {target: COALESCE(target.file_path, target.path), type: type(rel)}) as relationships
+                    RETURN COALESCE(f.file_path, f.path) as id, 
+                           COALESCE(f.file_path, f.path) as label, 
+                           relationships
                     """
                 )
             
@@ -725,7 +944,8 @@ class GraphDB:
                     label = '/'.join(parts[-2:]) if len(parts) >= 2 else parts[-1]
                     nodes.append({
                         'id': node_id,
-                        'label': label
+                        'label': label,
+                        'type': 'file'
                     })
                     seen_nodes.add(node_id)
                 
@@ -737,14 +957,15 @@ class GraphDB:
                             label = '/'.join(parts[-2:]) if len(parts) >= 2 else parts[-1]
                             nodes.append({
                                 'id': target_id,
-                                'label': label
+                                'label': label,
+                                'type': 'file'
                             })
                             seen_nodes.add(target_id)
                         
                         edges.append({
                             'source': node_id,
                             'target': target_id,
-                            'type': rel['type']
+                            'type': 'imports'
                         })
             
             return {'nodes': nodes, 'edges': edges}
@@ -766,7 +987,7 @@ class GraphDB:
             return str(Path(*parts[-3:]))
         return str(Path(normalized).name)
     
-    def resolve_file_path(self, file_path: str) -> str:
+    def resolve_file_path(self, file_path: str, repo_id: str = None) -> str:
         """Resolve a user-provided path to the actual path stored in Neo4j.
         
         Tries multiple matching strategies:
@@ -782,16 +1003,28 @@ class GraphDB:
         filename = Path(file_path).name
         
         with self.driver.session() as session:
-            result = session.run("""
-                MATCH (f:File)
-                WHERE f.path = $path OR f.file_path = $path
-                   OR f.path ENDS WITH $suffix OR f.path ENDS WITH $suffix_fwd
-                   OR f.path_normalized ENDS WITH $suffix_fwd
-                   OR f.path ENDS WITH '\\\\' + $filename
-                   OR f.path ENDS WITH '/' + $filename
-                RETURN f.path as resolved_path
-                LIMIT 1
-            """, path=file_path, suffix=suffix, suffix_fwd=suffix_fwd, filename=filename)
+            if repo_id:
+                result = session.run("""
+                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f:File)
+                    WHERE f.path = $path OR f.file_path = $path
+                       OR f.path ENDS WITH $suffix OR f.path ENDS WITH $suffix_fwd
+                       OR f.path_normalized ENDS WITH $suffix_fwd
+                       OR f.path ENDS WITH '\\\\' + $filename
+                       OR f.path ENDS WITH '/' + $filename
+                    RETURN COALESCE(f.file_path, f.path) as resolved_path
+                    LIMIT 1
+                """, repo_id=repo_id, path=file_path, suffix=suffix, suffix_fwd=suffix_fwd, filename=filename)
+            else:
+                result = session.run("""
+                    MATCH (f:File)
+                    WHERE f.path = $path OR f.file_path = $path
+                       OR f.path ENDS WITH $suffix OR f.path ENDS WITH $suffix_fwd
+                       OR f.path_normalized ENDS WITH $suffix_fwd
+                       OR f.path ENDS WITH '\\\\' + $filename
+                       OR f.path ENDS WITH '/' + $filename
+                    RETURN COALESCE(f.file_path, f.path) as resolved_path
+                    LIMIT 1
+                """, path=file_path, suffix=suffix, suffix_fwd=suffix_fwd, filename=filename)
             
             record = result.single()
             if record and record['resolved_path']:

@@ -1,8 +1,8 @@
 export const formatFilePath = (path, depth = 2) => {
   if (!path) return '';
   const normalized = path.replace(/\\/g, '/');
-  const parts = normalized.split('/');
-  if (parts.length <= depth) return parts[parts.length - 1];
+  const parts = normalized.split('/').filter(Boolean);
+  if (parts.length === 0) return normalized;
   return parts.slice(-depth).join('/');
 };
 
