@@ -422,24 +422,22 @@ async def import_git_history(repo_id: str, max_commits: int = 100):
 @app.delete("/repository/{repo_id}")
 async def delete_repository(repo_id: str):
     """Delete repository and all its data including cache"""
-    with engine.graph_db.driver.session() as session:
-        session.run("""
-            MATCH (r:Repository {repo_id: $repo_id})
-            OPTIONAL MATCH (r)-[:HAS_SNAPSHOT]->(s:Snapshot)
-            OPTIONAL MATCH (r)-[:CONTAINS]->(f:File)
-            OPTIONAL MATCH (f)-[:CONTAINS]->(c)
-            OPTIONAL MATCH (f)-[:HAS_VERSION]->(v:Version)
-            OPTIONAL MATCH (r)-[:HAS_COMMIT]->(cm:Commit)
-            DETACH DELETE r, s, f, c, v, cm
-            """, repo_id=repo_id)
+    counts = engine.graph_db.delete_repository_full(repo_id)
     
-    # Clear from memory cache
+    # Clear from memory cache and active engine state
     if engine.current_repo_id == repo_id:
         engine.current_repo_id = None
         engine.current_snapshot_id = None
         engine.memory_cache.clear()
+        engine.analyzers = {}
+        engine.repo_path = None
+    else:
+        # Evict any cache keys containing this repo_id
+        keys_to_delete = [k for k in list(engine.memory_cache.keys()) if repo_id in k]
+        for k in keys_to_delete:
+            del engine.memory_cache[k]
     
-    return {"status": "success", "message": f"Repository {repo_id} deleted"}
+    return {"status": "success", "message": f"Repository {repo_id} deleted", "counts": counts}
 
 @app.get("/files")
 async def list_files(repo_id: str = None):

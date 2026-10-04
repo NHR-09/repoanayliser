@@ -56,6 +56,56 @@ class GraphDB:
                 logger.info(f"🧹 Cleaned up {fn_deleted} orphaned Functions, {cls_deleted} orphaned Classes")
             return fn_deleted + cls_deleted
     
+    def delete_repository_full(self, repo_id: str) -> Dict[str, int]:
+        """Completely and safely remove a repository and all its associated nodes from Neo4j."""
+        counts = {}
+        with self.driver.session() as session:
+            # 1. Functions & Classes scoped to this repo
+            r = session.run("MATCH (fn:Function {repo_id: $repo_id}) DETACH DELETE fn RETURN count(fn) as c", repo_id=repo_id)
+            counts['functions'] = r.single()['c']
+            
+            r = session.run("MATCH (cls:Class {repo_id: $repo_id}) DETACH DELETE cls RETURN count(cls) as c", repo_id=repo_id)
+            counts['classes'] = r.single()['c']
+            
+            # 2. Files connected to this repository and their directly contained children
+            r = session.run("""
+                MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f:File)
+                OPTIONAL MATCH (f)-[:CONTAINS]->(child)
+                OPTIONAL MATCH (f)-[:HAS_VERSION]->(v:Version)
+                DETACH DELETE child, v, f
+                RETURN count(f) as c
+            """, repo_id=repo_id)
+            counts['files'] = r.single()['c']
+            
+            # 3. Snapshots
+            r = session.run("""
+                MATCH (r:Repository {repo_id: $repo_id})-[:HAS_SNAPSHOT]->(s:Snapshot)
+                DETACH DELETE s
+                RETURN count(s) as c
+            """, repo_id=repo_id)
+            counts['snapshots'] = r.single()['c']
+            
+            # 4. Commits
+            r = session.run("""
+                MATCH (r:Repository {repo_id: $repo_id})-[:HAS_COMMIT]->(cm:Commit)
+                DETACH DELETE cm
+                RETURN count(cm) as c
+            """, repo_id=repo_id)
+            counts['commits'] = r.single()['c']
+            
+            # 5. Loose Version or Commit nodes with repo_id
+            session.run("MATCH (v:Version {repo_id: $repo_id}) DETACH DELETE v", repo_id=repo_id)
+            session.run("MATCH (cm:Commit {repo_id: $repo_id}) DETACH DELETE cm", repo_id=repo_id)
+            
+            # 6. Repository node
+            r = session.run("MATCH (r:Repository {repo_id: $repo_id}) DETACH DELETE r RETURN count(r) as c", repo_id=repo_id)
+            counts['repository'] = r.single()['c']
+        
+        # 7. Clean up any leftover orphaned nodes
+        self.cleanup_orphaned_nodes()
+        logger.info(f"🗑️ Fully deleted repository {repo_id}: {counts}")
+        return counts
+    
     def create_file_node(self, file_path: str, language: str, content_hash: str = None):
         if not file_path:
             logger.warning("Attempted to create File node with empty path, skipping")

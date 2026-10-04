@@ -44,6 +44,14 @@ function App() {
     setRefreshKey(prev => prev + 1);
   };
 
+  const handleRepoDelete = (deletedRepoId) => {
+    if (currentRepoId === deletedRepoId) {
+      setCurrentRepoId(null);
+      setCurrentRepoName(null);
+      setRefreshKey(prev => prev + 1);
+    }
+  };
+
   useEffect(() => {
     const finalText = 'ARCHITECH';
     const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@#$%&*';
@@ -128,7 +136,13 @@ function App() {
       <main style={styles.main}>
         <div className="fade-in" key={activeTab + refreshKey}>
           {activeTab === 'analyze' && <AnalyzeRepo onAnalysisComplete={handleAnalysisComplete} />}
-          {activeTab === 'repositories' && <RepositoryManager key={refreshKey} onRepoSelect={handleRepoSelect} />}
+          {activeTab === 'repositories' && (
+            <RepositoryManager
+              key={refreshKey}
+              onRepoSelect={handleRepoSelect}
+              onRepoDelete={handleRepoDelete}
+            />
+          )}
           {activeTab === 'patterns' && <PatternDetection key={refreshKey} repoId={currentRepoId} />}
           {activeTab === 'coupling' && <CouplingAnalysis key={refreshKey} repoId={currentRepoId} />}
           {activeTab === 'blast-radius' && <BlastRadius key={refreshKey} repoId={currentRepoId} />}

@@ -14,6 +14,7 @@ function RepositoryManager(props) {
   const [importingHistory, setImportingHistory] = useState(false);
   const [importResult, setImportResult] = useState(null);
   const [deleting, setDeleting] = useState(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
 
   useEffect(() => {
     loadRepositories();
@@ -81,7 +82,6 @@ function RepositoryManager(props) {
   };
 
   const deleteRepo = async (repoId) => {
-    if (!window.confirm('Delete this repository and all its data?')) return;
     try {
       setDeleting(repoId);
       await api.deleteRepository(repoId);
@@ -90,10 +90,14 @@ function RepositoryManager(props) {
         setSelectedRepo(null);
         setActiveView('list');
       }
+      if (props.onRepoDelete) {
+        props.onRepoDelete(repoId);
+      }
     } catch (error) {
       alert('Failed to delete: ' + error.message);
     } finally {
       setDeleting(null);
+      setConfirmDeleteId(null);
     }
   };
 
@@ -139,13 +143,34 @@ function RepositoryManager(props) {
                     <span>{new Date(repo.last_analyzed).toLocaleString()}</span>
                   </div>
                 </div>
-                <button
-                  onClick={(e) => { e.stopPropagation(); deleteRepo(repo.repo_id); }}
-                  disabled={deleting === repo.repo_id}
-                  style={styles.deleteBtn}
-                >
-                  {deleting === repo.repo_id ? '...' : 'Del'}
-                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  {confirmDeleteId === repo.repo_id ? (
+                    <>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); deleteRepo(repo.repo_id); }}
+                        disabled={deleting === repo.repo_id}
+                        style={styles.deleteConfirmBtn}
+                      >
+                        {deleting === repo.repo_id ? '...' : 'Confirm?'}
+                      </button>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(null); }}
+                        style={styles.deleteCancelBtn}
+                        title="Cancel"
+                      >
+                        ✕
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(repo.repo_id); }}
+                      disabled={deleting === repo.repo_id}
+                      style={styles.deleteBtn}
+                    >
+                      Del
+                    </button>
+                  )}
+                </div>
               </div>
             ))
           )}
@@ -307,7 +332,9 @@ const styles = {
   statsBar: { display: 'flex', gap: '12px', marginTop: '16px' },
   statBox: { flex: 1, background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-md)', padding: '16px', textAlign: 'center' },
   statNumber: { fontSize: '22px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '4px', fontFamily: 'var(--font-mono)' },
-  deleteBtn: { padding: '8px 12px', background: 'var(--red-dim)', color: 'var(--red)', border: '1px solid rgba(248,113,113,0.15)', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: '14px', minWidth: '40px' },
+  deleteBtn: { padding: '8px 14px', background: 'var(--red-dim)', color: 'var(--red)', border: '1px solid rgba(248,113,113,0.15)', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: '13px', fontWeight: 600 },
+  deleteConfirmBtn: { padding: '8px 12px', background: 'var(--red)', color: '#fff', border: 'none', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: '12px', fontWeight: 700 },
+  deleteCancelBtn: { padding: '8px 10px', background: 'var(--bg-elevated)', color: 'var(--text-muted)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', cursor: 'pointer', fontSize: '12px' },
   backBtn: { padding: '8px 16px', background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', cursor: 'pointer', marginBottom: '16px', color: 'var(--text-secondary)', fontSize: '13px' },
   repoDetail: { marginBottom: '20px' },
   tabs: { display: 'flex', gap: '4px', marginBottom: '20px', borderBottom: '1px solid var(--border)' },
