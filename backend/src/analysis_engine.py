@@ -526,8 +526,8 @@ class AnalysisEngine:
     def _compute_arch_stats(self) -> Dict:
         """Compute structural stats from existing analyzers (no LLM needed).
         Falls back to Snapshot node properties when File nodes are missing."""
-        all_files = self.graph_db.get_all_files()
-        graph_data = self.graph_db.get_graph_data()
+        all_files = self.graph_db.get_all_files(repo_id=self.current_repo_id)
+        graph_data = self.graph_db.get_graph_data(repo_id=self.current_repo_id)
         coupling_data = self.coupling_analyzer.analyze() if self.coupling_analyzer else {}
         cycles = self.dependency_mapper.detect_cycles() if self.dependency_mapper else []
         patterns = self.pattern_detector.detect_patterns() if self.pattern_detector else {}
@@ -603,10 +603,10 @@ class AnalysisEngine:
         patterns = self.pattern_detector.detect_patterns()
         
         # Get all files and their dependencies from graph
-        all_files = self.graph_db.get_all_files()
+        all_files = self.graph_db.get_all_files(repo_id=self.current_repo_id)
         
         # Get graph structure data
-        graph_data = self.graph_db.get_graph_data()
+        graph_data = self.graph_db.get_graph_data(repo_id=self.current_repo_id)
         
         # Build graph context for LLM
         graph_context = self._build_graph_context(graph_data, all_files)
@@ -772,7 +772,7 @@ class AnalysisEngine:
             result = session.run("""
                 MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f:File)
                 OPTIONAL MATCH (f)-[:IMPORTS]->(m:Module)
-                OPTIONAL MATCH (f)-[:DEPENDS_ON]->(dep:File)
+                OPTIONAL MATCH (r)-[:CONTAINS]->(dep:File)<-[:DEPENDS_ON]-(f)
                 OPTIONAL MATCH (f)-[:CONTAINS]->(cls:Class)
                 OPTIONAL MATCH (f)-[:CONTAINS]->(fn:Function)
                 RETURN COALESCE(f.file_path, f.path) as file,
@@ -1326,7 +1326,7 @@ class AnalysisEngine:
         
         imports = parsed.get('imports', [])
         for imp in imports:
-            self.graph_db.create_import_relationship(parsed['file'], imp)
+            self.graph_db.create_import_relationship(parsed['file'], imp, self.current_repo_id)
         
         # Store class method ownership (parent_class on Function nodes)
         class_methods = parsed.get('class_methods', [])

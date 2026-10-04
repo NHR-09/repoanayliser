@@ -1,4 +1,6 @@
 import sys
+import os
+from pathlib import Path
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 if hasattr(sys.stderr, 'reconfigure'):
@@ -176,9 +178,12 @@ async def analyze_impact(request: ImpactRequest):
     return result
 
 @app.get("/dependencies/{file_path:path}")
-async def get_dependencies(file_path: str):
+async def get_dependencies(file_path: str, repo_id: str = None):
+    if repo_id and repo_id != engine.current_repo_id:
+        engine.load_repository_analysis(repo_id)
+    active_repo_id = repo_id or engine.current_repo_id
     resolved = engine._resolve_path(file_path)
-    deps = engine.graph_db.get_dependencies(resolved)
+    deps = engine.graph_db.get_dependencies(resolved, repo_id=active_repo_id)
     return {"file": file_path, "dependencies": deps}
 
 @app.get("/blast-radius/{file_path:path}")
@@ -192,18 +197,29 @@ async def get_blast_radius(file_path: str, change_type: str = "modify", repo_id:
         if repos:
             engine.load_repository_analysis(repos[0]['repo_id'])
     
-    # Find actual file path in database using flexible matching
+    active_repo_id = repo_id or engine.current_repo_id
+    # Find actual file path in database using flexible matching scoped by repo
     fp_fwd = file_path.replace('\\', '/')
     fp_bs = file_path.replace('/', '\\')
     with engine.graph_db.driver.session() as session:
-        result = session.run("""
-            MATCH (f:File)
-            WHERE f.path ENDS WITH $fp_bs OR f.file_path ENDS WITH $fp_bs
-               OR f.path ENDS WITH $fp_fwd OR f.file_path ENDS WITH $fp_fwd
-               OR f.path_normalized ENDS WITH $fp_fwd
-            RETURN COALESCE(f.file_path, f.path) as actual_path
-            LIMIT 1
-        """, fp_bs=fp_bs, fp_fwd=fp_fwd).single()
+        if active_repo_id:
+            result = session.run("""
+                MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f:File)
+                WHERE f.path ENDS WITH $fp_bs OR f.file_path ENDS WITH $fp_bs
+                   OR f.path ENDS WITH $fp_fwd OR f.file_path ENDS WITH $fp_fwd
+                   OR f.path_normalized ENDS WITH $fp_fwd
+                RETURN COALESCE(f.file_path, f.path) as actual_path
+                LIMIT 1
+            """, repo_id=active_repo_id, fp_bs=fp_bs, fp_fwd=fp_fwd).single()
+        else:
+            result = session.run("""
+                MATCH (f:File)
+                WHERE f.path ENDS WITH $fp_bs OR f.file_path ENDS WITH $fp_bs
+                   OR f.path ENDS WITH $fp_fwd OR f.file_path ENDS WITH $fp_fwd
+                   OR f.path_normalized ENDS WITH $fp_fwd
+                RETURN COALESCE(f.file_path, f.path) as actual_path
+                LIMIT 1
+            """, fp_bs=fp_bs, fp_fwd=fp_fwd).single()
         
         if result:
             actual_path = result['actual_path']
@@ -430,8 +446,12 @@ async def get_graph_data(repo_id: str = None):
     if engine.dependency_mapper and engine.dependency_mapper.graph:
         nx_graph = engine.dependency_mapper.graph
         
-        # Filter to only include File nodes (not external modules)
-        file_nodes = [n for n in nx_graph.nodes() if '\\' in n or '/' in n]
+        # Filter to only include actual project File nodes (not external packages)
+        file_nodes = [
+            n for n in nx_graph.nodes() 
+            if nx_graph.nodes[n].get('language') or (os.path.isabs(n) and Path(n).exists())
+        ]
+        file_nodes_set = set(file_nodes)
         
         nodes = []
         edges = []
@@ -444,15 +464,18 @@ async def get_graph_data(repo_id: str = None):
                 nodes.append({'id': node, 'label': label})
                 seen.add(node)
             
-            # Get edges from this node
+            # Get edges from this node to other project files
             for target in nx_graph.successors(node):
-                if target in file_nodes and target not in seen:
-                    parts = target.replace('\\', '/').split('/')
-                    label = '/'.join(parts[-2:]) if len(parts) >= 2 else parts[-1]
-                    nodes.append({'id': target, 'label': label})
-                    seen.add(target)
-                
-                if target in file_nodes:
+                edge_data = nx_graph.get_edge_data(node, target, {})
+                if edge_data.get('type') == 'external':
+                    continue
+                if target in file_nodes_set:
+                    if target not in seen:
+                        parts = target.replace('\\', '/').split('/')
+                        label = '/'.join(parts[-2:]) if len(parts) >= 2 else parts[-1]
+                        nodes.append({'id': target, 'label': label})
+                        seen.add(target)
+                    
                     edges.append({
                         'source': node,
                         'target': target,

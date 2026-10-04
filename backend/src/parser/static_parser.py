@@ -155,17 +155,42 @@ class StaticParser:
                 for child in node.children:
                     if child.type == 'dotted_name':
                         imports.append(self._get_node_text(child, code))
+                    elif child.type == 'aliased_import':
+                        name_node = child.child_by_field_name('name')
+                        if name_node:
+                            imports.append(self._get_node_text(name_node, code))
             elif node.type == 'import_from_statement':
-                for child in node.children:
-                    if child.type == 'dotted_name':
-                        imports.append(self._get_node_text(child, code))
-        elif language == 'javascript' and node.type == 'import_statement':
-            for child in node.children:
-                if child.type == 'string':
-                    imports.append(self._get_node_text(child, code).strip('"\'\''))
+                # In Python tree-sitter, the imported module is in field 'module_name'
+                mod_node = node.child_by_field_name('module_name')
+                if mod_node:
+                    imports.append(self._get_node_text(mod_node, code))
+                else:
+                    # Fallback for relative imports e.g. from . import x
+                    for child in node.children:
+                        if child.type in ('dotted_name', 'relative_import'):
+                            imports.append(self._get_node_text(child, code))
+                            break
+        elif language == 'javascript':
+            if node.type == 'import_statement':
+                src = node.child_by_field_name('source')
+                if src:
+                    imports.append(self._get_node_text(src, code).strip('"\'`'))
+                else:
+                    for child in node.children:
+                        if child.type == 'string':
+                            imports.append(self._get_node_text(child, code).strip('"\'`'))
+            elif node.type == 'call_expression':
+                # require('./module')
+                func_n = node.child_by_field_name('function')
+                if func_n and self._get_node_text(func_n, code) == 'require':
+                    args = node.child_by_field_name('arguments')
+                    if args:
+                        for arg in args.children:
+                            if arg.type == 'string':
+                                imports.append(self._get_node_text(arg, code).strip('"\'`'))
         for child in node.children:
             imports.extend(self._extract_imports(child, code, language))
-        return imports
+        return list(dict.fromkeys(imports))
     
     def _extract_function_calls(self, node, code, language) -> List[str]:
         """Extract function calls from code"""

@@ -20,20 +20,29 @@ class DependencyMapper:
             path_obj = Path(file_path)
             filename = path_obj.stem  # filename without extension
             
-            # Map: filename → file_path
+            # Map: filename without extension → file_path
             file_map[filename] = file_path
+            # Map: full filename with extension → file_path
+            file_map[path_obj.name] = file_path
             
             # Map: ./filename → file_path (relative imports)
             file_map[f'./{filename}'] = file_path
+            file_map[f'./{path_obj.name}'] = file_path
             file_map[f'../{filename}'] = file_path
+            file_map[f'../{path_obj.name}'] = file_path
             
-            # Map: full relative path from repo root
+            # Map: relative paths with slash and with dot
             parts = path_obj.parts
             if len(parts) >= 2:
-                # Get last 2-3 parts for matching
-                for i in range(max(0, len(parts)-3), len(parts)):
-                    rel_path = '/'.join(parts[i:]).replace('.py', '').replace('.js', '').replace('.java', '')
-                    file_map[rel_path] = file_path
+                for i in range(max(0, len(parts)-4), len(parts)):
+                    rel_slash_no_ext = '/'.join(parts[i:]).replace('.py', '').replace('.js', '').replace('.java', '')
+                    rel_dot_no_ext = '.'.join(parts[i:]).replace('.py', '').replace('.js', '').replace('.java', '')
+                    file_map[rel_slash_no_ext] = file_path
+                    file_map[f'./{rel_slash_no_ext}'] = file_path
+                    file_map[rel_dot_no_ext] = file_path
+                    rel_slash_with_ext = '/'.join(parts[i:])
+                    file_map[rel_slash_with_ext] = file_path
+                    file_map[f'./{rel_slash_with_ext}'] = file_path
         
         logger.info(f"   📋 Built module map with {len(file_map)} entries")
         
@@ -45,16 +54,39 @@ class DependencyMapper:
             for imp in file_data.get('imports', []):
                 # Try to resolve import to actual file
                 target_file = None
+                imp_clean = imp.replace('\\', '/').rstrip('/')
                 
-                # Direct match
-                if imp in file_map:
-                    target_file = file_map[imp]
-                else:
-                    # Try partial matches
-                    for module_key, module_file in file_map.items():
-                        if imp.endswith(module_key) or module_key.endswith(imp):
-                            target_file = module_file
-                            break
+                # Check filesystem-relative resolution first for relative imports
+                if imp_clean.startswith('.'):
+                    try:
+                        resolved_rel = (Path(file_path).parent / imp_clean).resolve()
+                        for ext in ['', '.py', '.js', '.jsx', '.ts', '.tsx', '.java']:
+                            cand = str(resolved_rel) + ext
+                            if cand in self.graph:
+                                target_file = cand
+                                break
+                    except Exception:
+                        pass
+                
+                if not target_file:
+                    imp_dot = imp.replace('/', '.')
+                    imp_slash = imp.replace('.', '/')
+                    
+                    # Direct match
+                    if imp in file_map:
+                        target_file = file_map[imp]
+                    elif imp_clean in file_map:
+                        target_file = file_map[imp_clean]
+                    elif imp_slash in file_map:
+                        target_file = file_map[imp_slash]
+                    elif imp_dot in file_map:
+                        target_file = file_map[imp_dot]
+                    else:
+                        # Try partial matches
+                        for module_key, module_file in file_map.items():
+                            if imp_clean.endswith(module_key) or module_key.endswith(imp_clean) or imp_dot.endswith(module_key):
+                                target_file = module_file
+                                break
                 
                 if target_file and target_file != file_path:
                     self.graph.add_edge(file_path, target_file, type='imports')
@@ -89,7 +121,10 @@ class DependencyMapper:
         # Try to find the node with flexible matching
         target_node = None
         for node in self.graph.nodes():
-            if node == normalized or node.endswith(str(Path(file_path).name)):
+            if node == normalized or str(Path(node).resolve()) == normalized:
+                target_node = node
+                break
+            if node.replace('\\', '/').endswith(file_path.replace('\\', '/')):
                 target_node = node
                 break
         
@@ -98,6 +133,8 @@ class DependencyMapper:
         
         affected = set()
         for node in self.graph.nodes():
+            if node == target_node or ('\\' not in node and '/' not in node):
+                continue
             try:
                 if nx.has_path(self.graph, node, target_node):
                     path_length = nx.shortest_path_length(self.graph, node, target_node)

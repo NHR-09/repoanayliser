@@ -9,7 +9,7 @@ class BlastRadiusAnalyzer:
         self.dependency_mapper = dependency_mapper
         self.graph_db = graph_db
     
-    def _normalize_file_path(self, file_path: str) -> str:
+    def _normalize_file_path(self, file_path: str, repo_id: str = None) -> str:
         """Normalize file path for consistent Neo4j matching.
         
         Returns both the resolved path and a forward-slash variant
@@ -17,7 +17,7 @@ class BlastRadiusAnalyzer:
         """
         # Try Neo4j-based resolution first
         if hasattr(self.graph_db, 'resolve_file_path'):
-            resolved = self.graph_db.resolve_file_path(file_path)
+            resolved = self.graph_db.resolve_file_path(file_path, repo_id=repo_id)
             if resolved != file_path:
                 return resolved
         
@@ -35,10 +35,27 @@ class BlastRadiusAnalyzer:
             file_path: Target file path
             change_type: "delete", "modify", or "move"
         """
-        # Normalize file path at entry point for consistent matching
-        resolved_path = self._normalize_file_path(file_path)
-        # Also keep a forward-slash variant for ENDS WITH matching
         file_path_fwd = file_path.replace('\\', '/')
+        
+        # If repo_id not provided, resolve from file
+        if not repo_id:
+            rel_suffix = file_path_fwd.split('/')[-2:] if len(file_path_fwd.split('/')) >= 2 else [file_path_fwd]
+            rel_path = '/'.join(rel_suffix)
+            with self.graph_db.driver.session() as session:
+                rec = session.run("""
+                    MATCH (r:Repository)-[:CONTAINS]->(f:File)
+                    WHERE f.file_path = $file_path OR f.path = $file_path
+                       OR f.path_normalized = $file_path_fwd
+                       OR f.path_normalized ENDS WITH '/' + $rel_path
+                    RETURN r.repo_id as repo_id
+                    LIMIT 1
+                """, file_path=file_path, file_path_fwd=file_path_fwd, rel_path=rel_path).single()
+                if rec:
+                    repo_id = rec['repo_id']
+        
+        # Normalize file path at entry point with repo_id scoping
+        resolved_path = self._normalize_file_path(file_path, repo_id=repo_id)
+        resolved_fwd = resolved_path.replace('\\', '/')
         
         direct = self._get_direct_dependents(resolved_path, file_path_fwd, repo_id)
         indirect = self._get_indirect_dependents(resolved_path, file_path_fwd, direct, repo_id)
@@ -103,18 +120,31 @@ class BlastRadiusAnalyzer:
         if not file_path_fwd:
             file_path_fwd = file_path.replace('\\', '/')
         
-        # Use Neo4j DEPENDS_ON relationships
-        # Query: Find files that DEPEND ON the target file
+        # Strip drive or parent prefixes for clean suffix matching
+        rel_suffix = file_path_fwd.split('/')[-2:] if len(file_path_fwd.split('/')) >= 2 else [file_path_fwd]
+        rel_path = '/'.join(rel_suffix)
+
         with self.graph_db.driver.session() as session:
-            result = session.run("""
-                MATCH (target:File)
-                WHERE target.file_path = $file_path OR target.path = $file_path
-                   OR target.file_path ENDS WITH $file_path OR target.path ENDS WITH $file_path
-                   OR target.path_normalized ENDS WITH $file_path_fwd
-                MATCH (source:File)-[:DEPENDS_ON]->(target)
-                WHERE source <> target
-                RETURN DISTINCT COALESCE(source.file_path, source.path) as dependent
-                """, file_path=file_path, file_path_fwd=file_path_fwd)
+            if repo_id:
+                result = session.run("""
+                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(target:File)
+                    WHERE target.file_path = $file_path OR target.path = $file_path
+                       OR target.path_normalized = $file_path_fwd
+                       OR target.path_normalized ENDS WITH '/' + $rel_path
+                    MATCH (r)-[:CONTAINS]->(source:File)-[:DEPENDS_ON]->(target)
+                    WHERE source <> target
+                    RETURN DISTINCT COALESCE(source.file_path, source.path) as dependent
+                    """, repo_id=repo_id, file_path=file_path, file_path_fwd=file_path_fwd, rel_path=rel_path)
+            else:
+                result = session.run("""
+                    MATCH (target:File)
+                    WHERE target.file_path = $file_path OR target.path = $file_path
+                       OR target.path_normalized = $file_path_fwd
+                       OR target.path_normalized ENDS WITH '/' + $rel_path
+                    MATCH (source:File)-[:DEPENDS_ON]->(target)
+                    WHERE source <> target
+                    RETURN DISTINCT COALESCE(source.file_path, source.path) as dependent
+                    """, file_path=file_path, file_path_fwd=file_path_fwd, rel_path=rel_path)
             
             for record in result:
                 if record['dependent']:
@@ -127,7 +157,6 @@ class BlastRadiusAnalyzer:
         Files that transitively depend on this file
         
         Note: Limited to 2-3 hops for performance and relevance.
-        Deeper dependencies (4+ hops) are considered too distant to be critical.
         """
         if direct is None:
             direct = set()
@@ -135,19 +164,33 @@ class BlastRadiusAnalyzer:
             file_path_fwd = file_path.replace('\\', '/')
         indirect = set()
         
-        # Use Neo4j path queries for transitive dependencies
-        # Query: Find files that depend on target through 2-3 hops
+        rel_suffix = file_path_fwd.split('/')[-2:] if len(file_path_fwd.split('/')) >= 2 else [file_path_fwd]
+        rel_path = '/'.join(rel_suffix)
+
         with self.graph_db.driver.session() as session:
-            result = session.run("""
-                MATCH (target:File)
-                WHERE target.file_path = $file_path OR target.path = $file_path
-                   OR target.file_path ENDS WITH $file_path OR target.path ENDS WITH $file_path
-                   OR target.path_normalized ENDS WITH $file_path_fwd
-                MATCH (source:File)
-                WHERE source <> target
-                MATCH path = (source)-[:DEPENDS_ON*2..3]->(target)
-                RETURN DISTINCT COALESCE(source.file_path, source.path) as dependent
-                """, file_path=file_path, file_path_fwd=file_path_fwd)
+            if repo_id:
+                result = session.run("""
+                    MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(target:File)
+                    WHERE target.file_path = $file_path OR target.path = $file_path
+                       OR target.path_normalized = $file_path_fwd
+                       OR target.path_normalized ENDS WITH '/' + $rel_path
+                    MATCH (r)-[:CONTAINS]->(source:File)
+                    WHERE source <> target
+                    MATCH path = (source)-[:DEPENDS_ON*2..3]->(target)
+                    WHERE ALL(n IN nodes(path) WHERE (r)-[:CONTAINS]->(n))
+                    RETURN DISTINCT COALESCE(source.file_path, source.path) as dependent
+                    """, repo_id=repo_id, file_path=file_path, file_path_fwd=file_path_fwd, rel_path=rel_path)
+            else:
+                result = session.run("""
+                    MATCH (target:File)
+                    WHERE target.file_path = $file_path OR target.path = $file_path
+                       OR target.path_normalized = $file_path_fwd
+                       OR target.path_normalized ENDS WITH '/' + $rel_path
+                    MATCH (source:File)
+                    WHERE source <> target
+                    MATCH path = (source)-[:DEPENDS_ON*2..3]->(target)
+                    RETURN DISTINCT COALESCE(source.file_path, source.path) as dependent
+                    """, file_path=file_path, file_path_fwd=file_path_fwd, rel_path=rel_path)
             
             for record in result:
                 dep = record['dependent']
@@ -157,34 +200,52 @@ class BlastRadiusAnalyzer:
         return indirect
     
     def _get_function_impact(self, file_path: str, file_path_fwd: str = None, repo_id: str = None) -> Dict:
-        """Get functions in this file and their callers (excluding self-calls)"""
+        """Get functions in this file and their callers from other files"""
         if not file_path_fwd:
             file_path_fwd = file_path.replace('\\', '/')
         
+        rel_suffix = file_path_fwd.split('/')[-2:] if len(file_path_fwd.split('/')) >= 2 else [file_path_fwd]
+        rel_path = '/'.join(rel_suffix)
+
         with self.graph_db.driver.session() as session:
             if repo_id:
                 result = session.run("""
                     MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f:File)-[:CONTAINS]->(fn:Function)
                     WHERE f.file_path = $file_path OR f.path = $file_path
-                       OR f.path_normalized ENDS WITH $file_path_fwd
-                    OPTIONAL MATCH (caller:File)-[:CALLS]->(fn)
-                    WHERE (r)-[:CONTAINS]->(caller) AND caller <> f
-                    RETURN fn.name as function, COLLECT(DISTINCT COALESCE(caller.file_path, caller.path)) as callers
-                    """, repo_id=repo_id, file_path=file_path, file_path_fwd=file_path_fwd)
+                       OR f.path_normalized = $file_path_fwd
+                       OR f.path_normalized ENDS WITH '/' + $rel_path
+                    
+                    OPTIONAL MATCH (r)-[:CONTAINS]->(caller_file:File)-[:CONTAINS]->(caller_fn:Function)-[:CALLS]->(fn)
+                    WHERE caller_file <> f
+                    
+                    OPTIONAL MATCH (r)-[:CONTAINS]->(fallback_file:File)-[:CALLS]->(fn)
+                    WHERE fallback_file <> f
+                    
+                    WITH fn, 
+                         COLLECT(DISTINCT COALESCE(caller_file.file_path, caller_file.path)) + 
+                         COLLECT(DISTINCT COALESCE(fallback_file.file_path, fallback_file.path)) as raw_callers
+                    RETURN fn.name as function, [c IN raw_callers WHERE c IS NOT NULL] as callers
+                    """, repo_id=repo_id, file_path=file_path, file_path_fwd=file_path_fwd, rel_path=rel_path)
             else:
                 result = session.run("""
                     MATCH (f:File)-[:CONTAINS]->(fn:Function)
                     WHERE f.file_path = $file_path OR f.path = $file_path
-                       OR f.path_normalized ENDS WITH $file_path_fwd
-                    OPTIONAL MATCH (caller:File)-[:CALLS]->(fn)
-                    WHERE caller <> f
-                    RETURN fn.name as function, COLLECT(DISTINCT COALESCE(caller.file_path, caller.path)) as callers
-                    """, file_path=file_path, file_path_fwd=file_path_fwd)
+                       OR f.path_normalized = $file_path_fwd
+                       OR f.path_normalized ENDS WITH '/' + $rel_path
+                    OPTIONAL MATCH (caller_file:File)-[:CONTAINS]->(caller_fn:Function)-[:CALLS]->(fn)
+                    WHERE caller_file <> f
+                    OPTIONAL MATCH (fallback_file:File)-[:CALLS]->(fn)
+                    WHERE fallback_file <> f
+                    WITH fn, 
+                         COLLECT(DISTINCT COALESCE(caller_file.file_path, caller_file.path)) + 
+                         COLLECT(DISTINCT COALESCE(fallback_file.file_path, fallback_file.path)) as raw_callers
+                    RETURN fn.name as function, [c IN raw_callers WHERE c IS NOT NULL] as callers
+                    """, file_path=file_path, file_path_fwd=file_path_fwd, rel_path=rel_path)
             
             functions = []
             all_callers = set()
             for record in result:
-                callers = [c for c in record["callers"] if c]
+                callers = sorted(set(c for c in record["callers"] if c))
                 functions.append({
                     "name": record["function"],
                     "callers": callers,
