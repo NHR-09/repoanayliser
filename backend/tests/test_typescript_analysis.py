@@ -70,10 +70,10 @@ class Runner { start(): string { return execute(); } }
         self.assertTrue({'run', 'execute', 'start'}.issubset(
             {item['name'] for item in parsed_main['functions']}
         ))
-        self.assertIn(
-            {'caller': 'execute', 'callee': 'run'},
-            parsed_main['function_to_function_calls']
-        )
+        self.assertTrue(any(
+            item.get('caller') == 'execute' and item.get('callee') == 'run'
+            for item in parsed_main['function_to_function_calls']
+        ))
 
         mapper = DependencyMapper()
         mapper.build_graph(parsed)

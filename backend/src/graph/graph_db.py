@@ -949,7 +949,6 @@ class GraphDB:
                     suffix_bs=suffix_bs,
                     suffix_fs=suffix_fs
                 )
-                )
                 func_callers = [dict(record) for record in func_result]
 
                 # 2. File-to-function callers within repository
