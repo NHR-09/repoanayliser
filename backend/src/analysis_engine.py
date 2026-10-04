@@ -27,12 +27,15 @@ def _log_progress(current: int, total: int, label: str = "Processing"):
     """Print a compact progress bar to stdout using carriage return."""
     pct = current / total if total else 1
     filled = int(30 * pct)
-    bar = '█' * filled + '░' * (30 - filled)
-    line = f"\r  {label} |{bar}| {current}/{total} ({pct*100:.0f}%)"
-    sys.stdout.write(line)
-    sys.stdout.flush()
-    if current >= total:
-        sys.stdout.write('\n')
+    bar = '=' * filled + '-' * (30 - filled)
+    line = f"\r  {label} [{bar}] {current}/{total} ({pct*100:.0f}%)"
+    try:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        if current >= total:
+            sys.stdout.write('\n')
+    except Exception:
+        pass
 
 class AnalysisEngine:
     def __init__(self):

@@ -50,7 +50,7 @@ class RepositoryLoader:
         logger.info(" Cloning repository (this may take a few minutes)...")
         try:
             result = subprocess.run(
-                ['git', 'clone', '--depth', '1', repo_url, str(target_path)],
+                ['git', '-c', 'core.longpaths=true', 'clone', '--depth', '1', repo_url, str(target_path)],
                 capture_output=True, text=True, timeout=300
             )
             if result.returncode != 0:
@@ -95,7 +95,7 @@ class RepositoryLoader:
         return files
     
     def _should_include(self, path: Path) -> bool:
-        exclude = {'node_modules', 'venv', '__pycache__', '.git', 'dist', 'build'}
+        exclude = {'node_modules', 'venv', '.venv', '__pycache__', '.git', 'dist', 'build', 'target'}
         return not any(part in exclude for part in path.parts)
     
     def _detect_language(self, ext: str) -> str:
