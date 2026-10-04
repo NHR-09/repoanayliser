@@ -184,7 +184,32 @@ async def get_dependencies(file_path: str, repo_id: str = None):
     active_repo_id = repo_id or engine.current_repo_id
     resolved = engine._resolve_path(file_path)
     deps = engine.graph_db.get_dependencies(resolved, repo_id=active_repo_id)
-    return {"file": file_path, "dependencies": deps}
+    
+    incoming = []
+    outgoing = []
+    if engine.dependency_mapper and engine.dependency_mapper.graph:
+        graph = engine.dependency_mapper.graph
+        target_node = None
+        if resolved in graph:
+            target_node = resolved
+        elif file_path in graph:
+            target_node = file_path
+        else:
+            fp_norm = file_path.replace('\\', '/')
+            for n in graph.nodes():
+                if n.replace('\\', '/').endswith(fp_norm):
+                    target_node = n
+                    break
+        if target_node:
+            incoming = list(graph.predecessors(target_node))
+            outgoing = list(graph.successors(target_node))
+            
+    return {
+        "file": file_path, 
+        "dependencies": deps,
+        "incoming": incoming,
+        "outgoing": outgoing
+    }
 
 @app.get("/blast-radius/{file_path:path}")
 async def get_blast_radius(file_path: str, change_type: str = "modify", repo_id: str = None):

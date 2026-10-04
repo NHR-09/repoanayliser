@@ -27,8 +27,8 @@ export const api = {
   analyzeImpact: (filePath, changeType = 'modify') =>
     axios.post(`${API_BASE}/impact`, { file_path: filePath, change_type: changeType }),
 
-  getDependencies: (filePath) =>
-    axios.get(`${API_BASE}/dependencies/${filePath}`),
+  getDependencies: (filePath, repoId) =>
+    axios.get(`${API_BASE}/dependencies/${filePath}`, { params: repoId ? { repo_id: repoId } : {} }),
 
   getBlastRadius: (filePath, changeType = 'modify', repoId) =>
     axios.get(`${API_BASE}/blast-radius/${filePath}`, { params: { change_type: changeType, ...(repoId ? { repo_id: repoId } : {}) } }),

@@ -5,6 +5,10 @@ import { formatFilePath } from '../utils/formatters';
 export default function CouplingAnalysis({ repoId }) {
   const [coupling, setCoupling] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [expandedFile, setExpandedFile] = useState(null);
+  const [hoveredFile, setHoveredFile] = useState(null);
+  const [fileDetails, setFileDetails] = useState({});
+  const [loadingDetails, setLoadingDetails] = useState(false);
 
   const loadCoupling = async () => {
     setLoading(true);
@@ -20,7 +24,41 @@ export default function CouplingAnalysis({ repoId }) {
 
   useEffect(() => {
     loadCoupling();
+    setExpandedFile(null);
+    setFileDetails({});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [repoId]);
+
+  const handleToggleExpand = async (item) => {
+    if (expandedFile === item.file) {
+      setExpandedFile(null);
+      return;
+    }
+    setExpandedFile(item.file);
+
+    // If incoming/outgoing are empty or not present, fetch from API
+    const hasIncoming = item.incoming && item.incoming.length > 0;
+    const hasOutgoing = item.outgoing && item.outgoing.length > 0;
+    if ((!hasIncoming && item.fanIn > 0) || (!hasOutgoing && item.fanOut > 0)) {
+      if (!fileDetails[item.file]) {
+        setLoadingDetails(true);
+        try {
+          const { data } = await api.getDependencies(item.file, repoId);
+          setFileDetails(prev => ({
+            ...prev,
+            [item.file]: {
+              incoming: data.incoming || [],
+              outgoing: data.outgoing || data.dependencies || []
+            }
+          }));
+        } catch (err) {
+          console.error('Failed to load file dependencies', err);
+        } finally {
+          setLoadingDetails(false);
+        }
+      }
+    }
+  };
 
   const getCouplingTier = (score) => {
     if (score >= 3.2) return { label: 'Critical', color: '#ef4444', rankBg: 'rgba(239, 68, 68, 0.15)', rankBorder: 'rgba(239, 68, 68, 0.35)', rankText: '#f87171' };
@@ -86,6 +124,10 @@ export default function CouplingAnalysis({ repoId }) {
     const barTotalPct = Math.min(100, Math.max(12, (total / maxTotal) * 100));
     const fanInSegmentPct = total > 0 ? (fanIn / total) * 100 : 50;
 
+    const incoming = (fileDetails[item.file]?.incoming || item.incoming || item.incoming_files || []);
+    const outgoing = (fileDetails[item.file]?.outgoing || item.outgoing || item.outgoing_files || []);
+    const externalModules = item.external_modules || [];
+
     return {
       ...item,
       rank: String(idx + 1).padStart(2, '0'),
@@ -96,6 +138,9 @@ export default function CouplingAnalysis({ repoId }) {
       tier,
       barTotalPct,
       fanInSegmentPct,
+      incoming,
+      outgoing,
+      externalModules,
     };
   });
 
@@ -218,59 +263,199 @@ export default function CouplingAnalysis({ repoId }) {
 
           {/* Files List */}
           <div style={s.filesContainer}>
-            {itemsWithScores.map((item) => (
-              <div key={item.rank} style={s.fileRow}>
-                {/* 1. Rank Badge */}
-                <div style={{
-                  ...s.rankBadge,
-                  background: item.tier.rankBg,
-                  borderColor: item.tier.rankBorder,
-                  color: item.tier.rankText,
-                }}>
-                  {item.rank}
-                </div>
+            {itemsWithScores.map((item) => {
+              const isExpanded = expandedFile === item.file;
+              const isHovered = hoveredFile === item.file;
+              const incoming = item.incoming || [];
+              const outgoing = item.outgoing || [];
+              const externalModules = item.externalModules || [];
 
-                {/* 2. File Path & Proportion Bar */}
-                <div style={s.fileCenter}>
-                  <div style={s.fileName} title={item.file}>
-                    {formatFilePath(item.file, 2)}
-                  </div>
-                  <div style={s.barTrack}>
-                    <div style={{ ...s.barFill, width: `${item.barTotalPct}%` }}>
-                      {/* Fan-in segment (Green) */}
-                      {item.fanIn > 0 && (
-                        <div style={{
-                          ...s.barGreenSegment,
-                          width: item.fanOut === 0 ? '100%' : `${item.fanInSegmentPct}%`,
-                        }} />
-                      )}
-                      {/* Fan-out segment (Red/Amber) */}
-                      {item.fanOut > 0 && (
-                        <div style={{
-                          ...s.barRedSegment,
-                          width: item.fanIn === 0 ? '100%' : `${100 - item.fanInSegmentPct}%`,
-                        }} />
-                      )}
+              return (
+                <div 
+                  key={item.rank}
+                  style={{
+                    ...s.fileItemContainer,
+                    ...(isExpanded ? s.fileItemContainerExpanded : {}),
+                  }}
+                >
+                  <div
+                    style={{
+                      ...s.fileRow,
+                      ...(isHovered && !isExpanded ? s.fileRowHover : {}),
+                      cursor: 'pointer',
+                    }}
+                    onClick={() => handleToggleExpand(item)}
+                    onMouseEnter={() => setHoveredFile(item.file)}
+                    onMouseLeave={() => setHoveredFile(null)}
+                    title={isExpanded ? "Click to collapse" : "Click to view exact coupled files"}
+                  >
+                    {/* 1. Rank Badge */}
+                    <div style={{
+                      ...s.rankBadge,
+                      background: item.tier.rankBg,
+                      borderColor: item.tier.rankBorder,
+                      color: item.tier.rankText,
+                    }}>
+                      {item.rank}
+                    </div>
+
+                    {/* 2. File Path & Proportion Bar */}
+                    <div style={s.fileCenter}>
+                      <div style={s.fileNameRow}>
+                        <div style={s.fileName} title={item.file}>
+                          {formatFilePath(item.file, 2)}
+                        </div>
+                        <span style={{
+                          ...s.clickToInspect,
+                          color: isExpanded ? '#38bdf8' : (isHovered ? '#94a3b8' : '#475569')
+                        }}>
+                          {isExpanded ? 'Hide coupled files ▲' : 'Click to see coupled files ▼'}
+                        </span>
+                      </div>
+                      <div style={s.barTrack}>
+                        <div style={{ ...s.barFill, width: `${item.barTotalPct}%` }}>
+                          {/* Fan-in segment (Green) */}
+                          {item.fanIn > 0 && (
+                            <div style={{
+                              ...s.barGreenSegment,
+                              width: item.fanOut === 0 ? '100%' : `${item.fanInSegmentPct}%`,
+                            }} />
+                          )}
+                          {/* Fan-out segment (Red/Amber) */}
+                          {item.fanOut > 0 && (
+                            <div style={{
+                              ...s.barRedSegment,
+                              width: item.fanIn === 0 ? '100%' : `${100 - item.fanInSegmentPct}%`,
+                            }} />
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 3. Fan-in (Inward / Incoming) */}
+                    <div style={s.metricIn} title="Incoming dependencies (files that import this)">
+                      <span style={s.arrowGreen}>↓</span> {item.fanIn}
+                    </div>
+
+                    {/* 4. Fan-out (Outward / Outgoing) */}
+                    <div style={s.metricOut} title="Outgoing dependencies (files/libraries this imports)">
+                      <span style={item.fanOut > 0 ? s.arrowRed : s.arrowMuted}>↑</span> {item.fanOut}
+                    </div>
+
+                    {/* 5. Score Pill */}
+                    <div style={s.scoreBox}>
+                      {item.score}
+                    </div>
+
+                    {/* 6. Expand Chevron */}
+                    <div style={{
+                      ...s.chevronWrap,
+                      transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                    }}>
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={isExpanded ? '#38bdf8' : '#94a3b8'} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <polyline points="6 9 12 15 18 9"></polyline>
+                      </svg>
                     </div>
                   </div>
-                </div>
 
-                {/* 3. Fan-in (Inward / Incoming) */}
-                <div style={s.metricIn} title="Incoming dependencies (used by)">
-                  <span style={s.arrowGreen}>↓</span> {item.fanIn}
-                </div>
+                  {/* Expanded Coupled Files Drawer */}
+                  {isExpanded && (
+                    <div style={s.coupledDrawer}>
+                      <div style={s.drawerHeader}>
+                        <div style={s.drawerTitleGroup}>
+                          <span style={s.drawerTitlePrefix}>Coupled Connections for:</span>
+                          <span style={s.drawerFileName}>{formatFilePath(item.file, 3)}</span>
+                        </div>
+                        <span style={s.drawerFullPath} title={item.file}>{item.file}</span>
+                      </div>
 
-                {/* 4. Fan-out (Outward / Outgoing) */}
-                <div style={s.metricOut} title="Outgoing dependencies (depends on)">
-                  <span style={item.fanOut > 0 ? s.arrowRed : s.arrowMuted}>↑</span> {item.fanOut}
-                </div>
+                      {loadingDetails && (!incoming.length && !outgoing.length) ? (
+                        <div style={s.drawerLoading}>
+                          <div style={s.spinnerSmall} />
+                          <span>Fetching connected files...</span>
+                        </div>
+                      ) : (
+                        <div style={s.coupledColsGrid}>
+                          {/* Column 1: Inward Coupling (Incoming) */}
+                          <div style={s.couplingCol}>
+                            <div style={s.colHeader}>
+                              <div style={s.colHeaderTitle}>
+                                <span style={s.colIconIn}>↓</span>
+                                <span style={s.colTitleIn}>Inward Coupling (Used By)</span>
+                              </div>
+                              <span style={s.colBadgeIn}>{incoming.length} files</span>
+                            </div>
+                            <p style={s.colDescription}>
+                              Files that directly import or depend on this file:
+                            </p>
 
-                {/* 5. Score Pill */}
-                <div style={s.scoreBox}>
-                  {item.score}
+                            <div style={s.coupledFilesScroll}>
+                              {incoming.length > 0 ? (
+                                incoming.map((f, i) => (
+                                  <div key={i} style={s.connectedFileItem} title={f}>
+                                    <span style={s.itemArrowIn}>↓</span>
+                                    <div style={s.itemPathGroup}>
+                                      <span style={s.itemShortName}>{formatFilePath(f, 2)}</span>
+                                      <span style={s.itemFullName}>{f}</span>
+                                    </div>
+                                  </div>
+                                ))
+                              ) : (
+                                <div style={s.emptyConnectionMsg}>
+                                  <span>ℹ️</span> No inward dependents (Entry point or standalone module)
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Column 2: Outward Coupling (Outgoing) */}
+                          <div style={s.couplingCol}>
+                            <div style={s.colHeader}>
+                              <div style={s.colHeaderTitle}>
+                                <span style={s.colIconOut}>↑</span>
+                                <span style={s.colTitleOut}>Outward Coupling (Depends On)</span>
+                              </div>
+                              <span style={s.colBadgeOut}>{outgoing.length} dependencies</span>
+                            </div>
+                            <p style={s.colDescription}>
+                              Files & modules that this file directly imports:
+                            </p>
+
+                            <div style={s.coupledFilesScroll}>
+                              {outgoing.length > 0 ? (
+                                outgoing.map((f, i) => {
+                                  const isExternal = externalModules.includes(f) || (!f.includes('/') && !f.includes('\\'));
+                                  return (
+                                    <div key={i} style={s.connectedFileItem} title={f}>
+                                      <span style={isExternal ? s.itemIconExt : s.itemArrowOut}>
+                                        {isExternal ? '📦' : '↑'}
+                                      </span>
+                                      <div style={s.itemPathGroup}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                                          <span style={s.itemShortName}>
+                                            {isExternal ? f : formatFilePath(f, 2)}
+                                          </span>
+                                          {isExternal && <span style={s.extTag}>external</span>}
+                                        </div>
+                                        <span style={s.itemFullName}>{f}</span>
+                                      </div>
+                                    </div>
+                                  );
+                                })
+                              ) : (
+                                <div style={s.emptyConnectionMsg}>
+                                  <span>ℹ️</span> No outgoing dependencies (Leaf utility/service)
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -502,11 +687,53 @@ const s = {
     flexDirection: 'column',
     gap: '14px',
   },
+  fileItemContainer: {
+    borderRadius: '10px',
+    transition: 'all 0.2s ease',
+    border: '1px solid transparent',
+  },
+  fileItemContainerExpanded: {
+    background: 'rgba(255, 255, 255, 0.02)',
+    border: '1px solid rgba(56, 189, 248, 0.25)',
+    boxShadow: '0 4px 20px rgba(0, 0, 0, 0.3)',
+    borderRadius: '10px',
+    overflow: 'hidden',
+  },
   fileRow: {
     display: 'flex',
     alignItems: 'center',
     gap: '16px',
-    padding: '6px 4px',
+    padding: '8px 10px',
+    borderRadius: '8px',
+    transition: 'background 0.15s ease',
+  },
+  fileRowHover: {
+    background: 'rgba(255, 255, 255, 0.035)',
+  },
+  fileNameRow: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '8px',
+  },
+  clickToInspect: {
+    fontSize: '11px',
+    fontWeight: '500',
+    fontFamily: "'JetBrains Mono', monospace",
+    transition: 'color 0.2s ease',
+    flexShrink: 0,
+    userSelect: 'none',
+  },
+  chevronWrap: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '22px',
+    height: '22px',
+    borderRadius: '4px',
+    background: 'rgba(255, 255, 255, 0.04)',
+    transition: 'transform 0.2s ease',
+    flexShrink: 0,
   },
   rankBadge: {
     width: '26px',
@@ -600,6 +827,238 @@ const s = {
     textAlign: 'center',
     fontFamily: "'JetBrains Mono', monospace",
     flexShrink: 0,
+  },
+
+  // Coupled Connections Drawer
+  coupledDrawer: {
+    padding: '16px 20px 20px',
+    background: 'rgba(10, 15, 26, 0.75)',
+    borderTop: '1px solid rgba(56, 189, 248, 0.15)',
+    marginTop: '6px',
+    borderRadius: '0 0 10px 10px',
+  },
+  drawerHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '14px',
+    paddingBottom: '10px',
+    borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+    flexWrap: 'wrap',
+    gap: '8px',
+  },
+  drawerTitleGroup: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  drawerTitlePrefix: {
+    fontSize: '12px',
+    fontWeight: '600',
+    color: '#94a3b8',
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+  },
+  drawerFileName: {
+    fontSize: '13px',
+    fontWeight: '700',
+    color: '#38bdf8',
+    fontFamily: "'JetBrains Mono', monospace",
+  },
+  drawerFullPath: {
+    fontSize: '11px',
+    color: '#64748b',
+    fontFamily: "'JetBrains Mono', monospace",
+    maxWidth: '400px',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  drawerLoading: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '10px',
+    padding: '24px 0',
+    color: '#94a3b8',
+    fontSize: '13px',
+  },
+  spinnerSmall: {
+    width: '18px',
+    height: '18px',
+    border: '2px solid rgba(255, 255, 255, 0.1)',
+    borderTop: '2px solid #38bdf8',
+    borderRadius: '50%',
+    animation: 'spin 0.8s linear infinite',
+  },
+  coupledColsGrid: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+    gap: '16px',
+  },
+  couplingCol: {
+    background: 'rgba(15, 23, 42, 0.65)',
+    border: '1px solid rgba(255, 255, 255, 0.06)',
+    borderRadius: '10px',
+    padding: '14px 16px',
+    display: 'flex',
+    flexDirection: 'column',
+  },
+  colHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '6px',
+  },
+  colHeaderTitle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '8px',
+  },
+  colIconIn: {
+    fontSize: '14px',
+    fontWeight: '700',
+    color: '#22c55e',
+    width: '20px',
+    height: '20px',
+    borderRadius: '4px',
+    background: 'rgba(34, 197, 94, 0.12)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  colIconOut: {
+    fontSize: '14px',
+    fontWeight: '700',
+    color: '#ef4444',
+    width: '20px',
+    height: '20px',
+    borderRadius: '4px',
+    background: 'rgba(239, 68, 68, 0.12)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  colTitleIn: {
+    fontSize: '13px',
+    fontWeight: '600',
+    color: '#86efac',
+  },
+  colTitleOut: {
+    fontSize: '13px',
+    fontWeight: '600',
+    color: '#fca5a5',
+  },
+  colBadgeIn: {
+    fontSize: '11px',
+    fontWeight: '600',
+    color: '#22c55e',
+    background: 'rgba(34, 197, 94, 0.1)',
+    border: '1px solid rgba(34, 197, 94, 0.25)',
+    padding: '2px 8px',
+    borderRadius: '12px',
+    fontFamily: "'JetBrains Mono', monospace",
+  },
+  colBadgeOut: {
+    fontSize: '11px',
+    fontWeight: '600',
+    color: '#ef4444',
+    background: 'rgba(239, 68, 68, 0.1)',
+    border: '1px solid rgba(239, 68, 68, 0.25)',
+    padding: '2px 8px',
+    borderRadius: '12px',
+    fontFamily: "'JetBrains Mono', monospace",
+  },
+  colDescription: {
+    fontSize: '11px',
+    color: '#64748b',
+    margin: '0 0 10px',
+    lineHeight: '1.4',
+  },
+  coupledFilesScroll: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '6px',
+    maxHeight: '260px',
+    overflowY: 'auto',
+    paddingRight: '4px',
+  },
+  connectedFileItem: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: '10px',
+    padding: '8px 10px',
+    background: 'rgba(255, 255, 255, 0.025)',
+    border: '1px solid rgba(255, 255, 255, 0.04)',
+    borderRadius: '6px',
+    transition: 'background 0.15s ease',
+  },
+  itemArrowIn: {
+    color: '#22c55e',
+    fontWeight: '700',
+    fontSize: '12px',
+    marginTop: '2px',
+    flexShrink: 0,
+  },
+  itemArrowOut: {
+    color: '#ef4444',
+    fontWeight: '700',
+    fontSize: '12px',
+    marginTop: '2px',
+    flexShrink: 0,
+  },
+  itemIconExt: {
+    fontSize: '12px',
+    marginTop: '2px',
+    flexShrink: 0,
+  },
+  itemPathGroup: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '2px',
+    minWidth: 0,
+    flex: 1,
+  },
+  itemShortName: {
+    fontSize: '12px',
+    fontWeight: '600',
+    color: '#e2e8f0',
+    fontFamily: "'JetBrains Mono', monospace",
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  itemFullName: {
+    fontSize: '10px',
+    color: '#64748b',
+    fontFamily: "'JetBrains Mono', monospace",
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+  },
+  extTag: {
+    fontSize: '9px',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    color: '#a78bfa',
+    background: 'rgba(167, 139, 250, 0.12)',
+    border: '1px solid rgba(167, 139, 250, 0.25)',
+    padding: '1px 5px',
+    borderRadius: '4px',
+    letterSpacing: '0.4px',
+  },
+  emptyConnectionMsg: {
+    padding: '16px 12px',
+    textAlign: 'center',
+    fontSize: '12px',
+    color: '#64748b',
+    background: 'rgba(255, 255, 255, 0.015)',
+    borderRadius: '6px',
+    border: '1px dashed rgba(255, 255, 255, 0.08)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '6px',
   },
 
   // Circular dependencies
