@@ -1,351 +1,299 @@
-# ARCHITECH — Architectural Recovery & Semantic Synthesis
+# ARCHITECH 📐
 
-ARCHITECH is a full-stack tool that analyzes software repositories (GitHub URLs or local paths), builds a knowledge graph of their structure, detects architectural patterns, measures coupling, computes blast radius, and generates LLM-powered explanations.
+### *Autonomous Architectural Recovery, Dependency Intelligence & Semantic Codebase Synthesis*
 
----
-
-## Tech Stack
-
-| Layer | Technology |
-|---|---|
-| Backend API | FastAPI + Uvicorn |
-| Graph Database | Neo4j |
-| In-memory Graph | NetworkX |
-| AST Parsing | Tree-sitter (Python, JavaScript, TypeScript/TSX) |
-| LLM | Groq (llama-3.3-70b-versatile) |
-| Structural Indexing | Graphify CLI (`graphifyy`) |
-| Frontend | React |
-| HTTP Client | Axios |
+[![Neo4j](https://img.shields.io/badge/Graph_Database-Neo4j_5.x-008CC1?style=for-the-badge&logo=neo4j&logoColor=white)](https://neo4j.com/)
+[![FastAPI](https://img.shields.io/badge/API_Framework-FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Tree-sitter](https://img.shields.io/badge/AST_Parsing-Tree--sitter-1e293b?style=for-the-badge)](https://tree-sitter.github.io/tree-sitter/)
+[![NetworkX](https://img.shields.io/badge/Graph_Algorithms-NetworkX-38bdf8?style=for-the-badge)](https://networkx.org/)
+[![Groq](https://img.shields.io/badge/LLM_Reasoning-Groq_Llama_3.3_70B-f97316?style=for-the-badge)](https://groq.com/)
+[![React](https://img.shields.io/badge/Frontend-React_18_%2B_D3.js-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://reactjs.org/)
 
 ---
 
-## Project Structure
+## 📌 Problem Statement
+
+> Modern software systems contain thousands of evolving source files, making architecture difficult to understand and maintain. Over time, dependencies grow, module boundaries blur, and architectural intent becomes undocumented.
+>
+> Developers lack effective tools to visualize system architecture, identify subsystems and dependencies, detect circular coupling, and predict the impact of code changes.
+>
+> This results in **slow onboarding, risky refactoring, rising technical debt, and architectural erosion**.
+>
+> The need is for a system that automatically analyzes a codebase, visualizes its architecture and dependencies, and highlights structural risks to improve codebase comprehension and enable safer, more efficient development.
+
+---
+
+## 💡 System Overview
+
+**ARCHITECH** is an automated architectural intelligence engine that extracts, visualizes, reasons about, and tracks software architecture across time.
+
+By unifying **Abstract Syntax Tree (AST) parsing via Tree-sitter**, **dual-layer graph databases (Neo4j & NetworkX)**, **heuristic pattern detection algorithms**, and **LLM-driven semantic synthesis (Groq Llama-3.3-70B)**, ARCHITECH transforms flat repositories into queryable, multi-dimensional knowledge graphs.
+
+```
+                           ┌─────────────────────────────────────────┐
+                           │   Repository Input (GitHub / Local)     │
+                           └────────────────────┬────────────────────┘
+                                                │
+                                                ▼
+                           ┌─────────────────────────────────────────┐
+                           │ Static AST Extraction (Tree-sitter)     │
+                           │ Classes, Functions, Imports, OOP Calls  │
+                           └────────────────────┬────────────────────┘
+                                                │
+                 ┌──────────────────────────────┴──────────────────────────────┐
+                 ▼                                                             ▼
+┌─────────────────────────────────┐                           ┌─────────────────────────────────┐
+│ In-Memory DiGraph (NetworkX)    │                           │ Graph Database (Neo4j)          │
+│ • Johnson's Cycle Detection     │                           │ • Persistent Node/Edge Topology │
+│ • Multi-Signal Pattern Analysis │                           │ • Transitive Call Calculation   │
+│ • Fan-In / Fan-Out Metrics      │                           │ • Cryptographic Snapshot Lineage│
+└────────────────┬────────────────┘                           └────────────────┬────────────────┘
+                 │                                                             │
+                 └──────────────────────────────┬──────────────────────────────┘
+                                                │
+                                                ▼
+                           ┌─────────────────────────────────────────┐
+                           │ Structural Context & Retrieval Engine   │
+                           │ Graphify AST Indexing + README Context  │
+                           └────────────────────┬────────────────────┘
+                                                │
+                                                ▼
+                           ┌─────────────────────────────────────────┐
+                           │ Semantic LLM Synthesis (Groq Llama 3.3) │
+                           │ Macro, Meso & Micro Architecture Review │
+                           └────────────────────┬────────────────────┘
+                                                │
+                                                ▼
+                           ┌─────────────────────────────────────────┐
+                           │ Interactive UI (React + D3.js Force)    │
+                           │ Dynamic Blast Radius, Coupling, Graphs  │
+                           └─────────────────────────────────────────┘
+```
+
+---
+
+## 🔬 Core Architectural Subsystems & Working Details
+
+### 1. Static AST Ingestion & OOP-Aware Parsing (`StaticParser`)
+* **Grammar Parsing Engines:** Utilizes native Tree-sitter parsers (`tree-sitter-python`, `tree-sitter-javascript`) to generate concrete syntax trees (CST/AST).
+* **Two-Pass Ingestion Protocol:**
+  * **Pass 1 (Node Extraction & Structural Typing):** Extracts `class_definition`, `function_definition`, `import_statement`, and inspects `__init__` constructor assignments (`self.X = ClassName()`) to infer object-oriented dependency injection. File nodes are assigned content SHA-256 hashes.
+  * **Pass 2 (Cross-File Call Graph & OOP Resolution):** Recursively traverses function bodies to extract caller-callee bindings (`f2f`). Resolves indirect method dispatch (`self.target_service.execute()`) by matching receiver types against known class method definitions across the codebase.
+
+---
+
+### 2. Dual-Layer Graph Architecture (`GraphDB` & `DependencyMapper`)
+ARCHITECH pairs an in-memory graph engine with a persistent graph database for distinct computational advantages:
+
+| Subsystem | Technology | Primary Responsibilities |
+|---|---|---|
+| **Persistent Knowledge Graph** | **Neo4j** (Cypher) | Storage of all entities (`Repository`, `Snapshot`, `Commit`, `Version`, `File`, `Class`, `Function`, `Module`), multi-hop path traversals (`[:DEPENDS_ON*2..3]`), transitive call chain generation (`[:CALLS_TRANSITIVE]`), and cross-commit snapshot querying. |
+| **Algorithmic Graph Engine** | **NetworkX** (`DiGraph`) | High-speed in-memory structural algorithms: Johnson's cycle detection (`nx.simple_cycles`), strongly connected components (`nx.strongly_connected_components`), instant in/out-degree calculations, and heuristic classification. |
+
+#### Neo4j Graph Schema Taxonomy
+* **Nodes:** `(:Repository)`, `(:Snapshot)`, `(:Commit)`, `(:User)`, `(:File)`, `(:Class)`, `(:Function)`, `(:Module)`, `(:Version)`
+* **Relationships:**
+  * `(:Repository)-[:CONTAINS]->(:File)`
+  * `(:Repository)-[:HAS_SNAPSHOT]->(:Snapshot)`
+  * `(:Repository)-[:HAS_COMMIT]->(:Commit)-[:AUTHORED_BY]->(:User)`
+  * `(:File)-[:CONTAINS]->(:Class|:Function)`
+  * `(:File)-[:IMPORTS]->(:Module)`
+  * `(:File)-[:DEPENDS_ON]->(:File)`
+  * `(:File|:Function)-[:CALLS]->(:Function)`
+  * `(:Function)-[:CALLS_TRANSITIVE]->(:Function)`
+  * `(:File)-[:HAS_VERSION]->(:Version)-[:VERSION_AT]->(:Commit)`
+  * `(:Version)-[:PREVIOUS_VERSION]->(:Version)`
+  * `(:Commit)-[:PREVIOUS_COMMIT]->(:Commit)`
+
+---
+
+### 3. Multi-Signal Architectural Pattern Detection (`PatternDetector`)
+Pattern detection uses a multi-signal heuristic classifier evaluating file paths, directory conventions, class/function AST names, and framework import signatures:
+
+```
+                                  Classification Signals
+   ┌───────────────────────┬──────────────────────┬──────────────────────┬──────────────────────┐
+   │    Filename Stem      │   Directory Name     │  AST Class/Func Name │    Framework Imports │
+   └───────────┬───────────┴──────────┬───────────┴──────────┬───────────┴──────────┬───────────┘
+               │                      │                      │                      │
+               └──────────────────────┼──────────────────────┼──────────────────────┘
+                                      ▼
+                        Node Role Classification Engine
+                     (Presentation | Business | Data Layer)
+                                      │
+                                      ▼
+                        Pattern Heuristic Rules & Scoring
+```
+
+1. **Layered (N-tier):** Verifies physical or directory separation across Presentation (`routes`, `api`, `controllers`), Business (`services`, `core`, `engine`), and Data (`models`, `repositories`, `db`). Computes inter-layer dependency validation ($P \rightarrow B$, $B \rightarrow D$).
+2. **Model-View-Controller (MVC):** Verifies controller routing definitions, model schemas/entities, and view template components. Validates controller-to-model dependency links ($C \rightarrow M$).
+3. **Hexagonal (Ports & Adapters):** Identifies boundary interfaces/ports, infrastructure adapters, and domain core modules. Checks domain isolation: verifies domain nodes have $< 30\%$ external coupling.
+4. **Event-Driven:** Detects event definitions, publishers (`emit`, `dispatch`), subscribers (`listen`, `consume`), and broker integrations (`celery`, `kafka`, `rabbitmq`, `pika`).
+5. **Pipe & Filter:** Detects data processing pipelines, transformation stages, and filter chains. Checks for sequential execution edges.
+6. **Client-Server:** Identifies server APIs (`fastapi`, `flask`, `express`) versus client HTTP consumers (`axios`, `fetch`, `requests`, `httpx`).
+7. **Microkernel (Plugin):** Identifies core orchestrator modules versus dynamic extension/plugin registry mechanisms.
+8. **Microservices:** Identifies independent service directories, API gateways, service discovery (`consul`, `grpc`), and inter-service communication paths.
+
+---
+
+### 4. Coupling Metrics & Structural Risk Scoring (`CouplingAnalyzer`)
+
+#### Metrics Computed
+* **Afferent Coupling / Fan-In ($C_a$):** Number of external files that depend on this file. High Fan-In indicates high responsibility / core abstraction.
+* **Efferent Coupling / Fan-Out ($C_e$):** Number of external files this file depends on. High Fan-Out indicates high instability / fragility.
+* **Instability Index ($I$):** $I = \frac{C_e}{C_a + C_e}$ ($I=0$ represents maximum stability, $I=1$ represents maximum instability).
+* **Circular Coupling Cycles:** Exact circular dependency chains detected using depth-first circuit enumeration.
+
+#### Structural Risk Formula
+Every file receives an objective risk score $R \in [0, 100]$:
+
+$$R = \min\left(100, (C_a \times 8) + (C_e \times 5) + (\text{CycleBonus}) + (\text{HighFanBonus})\right)$$
+
+Where:
+* $\text{CycleBonus} = 30$ if the file participates in any circular dependency cycle.
+* $\text{HighFanBonus} = 10 \text{ if } C_a > 5 \text{ } + 10 \text{ if } C_e > 5$.
+* Categorization: **Critical** ($R \ge 80$), **High** ($R \ge 60$), **Medium** ($R \ge 30$), **Low** ($R < 30$).
+
+---
+
+### 5. Change Impact & Blast Radius Simulation (`BlastRadiusAnalyzer`)
+Simulates the systemic impact of making changes to any file in the codebase before a single line of code is edited:
+
+```
+ [ Target File ] ──(1-hop)──► [ Direct Dependents ] ──(2-3 hops)──► [ Indirect Dependents ]
+        │
+        └───[:CONTAINS]──► [ Functions ] ◄──[:CALLS]── [ External Callers ]
+```
+
+* **Direct Blast Radius (1-Hop):** Exact files with direct `[:DEPENDS_ON]` edges pointing to the target.
+* **Indirect Blast Radius (2–3 Hops):** Cascading files affected via transitive dependencies, bounded to 3 hops to maintain architectural relevance.
+* **Function-Level Breaking Surface:** Functions defined within the target file and their runtime callers across the entire repository.
+* **Simulation Modes:**
+  * `DELETE`: Evaluates total catastrophic breakages (30 pts per direct dependent + 20 pts per function caller).
+  * `MOVE`: Evaluates import reference breaks across existing callers (8 pts per dependent).
+  * `MODIFY`: Evaluates logic regression and test surface risk (5 pts per total affected dependent).
+
+---
+
+### 6. Cryptographic Snapshot Lineage & Integrity (`VersionTracker`)
+* **SHA-256 Content Fingerprinting:** Hashes all source code content, establishing an immutable cryptographic audit trail.
+* **Git Lineage Backfilling:** Imports historical commits to construct previous version lineages (`(:Version)-[:PREVIOUS_VERSION]->(:Version)`).
+* **Snapshot Versioning:** Stores complete architectural metric snapshots per Git commit hash.
+* **Architectural Delta Engine (`compare_snapshots`):** Compares any two historical snapshots to compute:
+  * File diffs (added, removed, modified)
+  * Net coupling metric changes ($\Delta \text{avg\_coupling}$)
+  * Net circular dependency deltas ($\Delta \text{cycles}$)
+  * Architectural pattern shifts (e.g. newly emerging MVC or degraded Hexagonal isolation)
+
+---
+
+### 7. Hybrid Semantic Synthesis (`LLMReasoner` + `RetrievalEngine`)
+To produce genuine architectural insights rather than generic code descriptions, ARCHITECH compiles graph topology into an enriched architectural context prompt:
+
+1. **Project Framing:** Extracted intent and domain from `README.md`.
+2. **Topological Metrics:** High fan-out files, hub orchestrators, cycle paths, and risk scores.
+3. **Graphify Knowledge Extraction:** Class/function signatures, AST-indexed dependency edges, and code snippets from hub nodes.
+4. **Structured Inference:** Groq Llama-3.3-70B synthesizes a three-tier architectural report:
+   * **Macro Level (Overview):** System domain, architectural style, fit, and subsystem breakdown.
+   * **Meso Level (Modules):** Subsystem boundaries, inter-module data flow, and separation of concerns.
+   * **Micro Level (Key Files):** Architecturally critical files, single points of failure, God objects, and refactoring recommendations.
+
+---
+
+## 🗂️ Repository Architecture & File Matrix
 
 ```
 repoanayliser-main/
 ├── backend/
-│   ├── main.py
-│   ├── requirements.txt
-│   ├── setup.bat
-│   ├── .env
-│   └── src/
-│       ├── config.py
-│       ├── analysis_engine.py
-│       ├── analysis/
-│       │   └── confidence_analyzer.py
-│       ├── api/
-│       │   └── commit_routes.py
-│       ├── graph/
-│       │   ├── analyzers.py
-│       │   ├── blast_radius.py
-│       │   ├── dependency_mapper.py
-│       │   ├── function_graph.py
-│       │   ├── graph_db.py
-│       │   └── version_tracker.py
-│       ├── parser/
-│       │   ├── repo_loader.py
-│       │   └── static_parser.py
-│       ├── reasoning/
-│       │   └── llm_reasoner.py
-│       └── retrieval/
-│           ├── graphify_retriever.py
-│           └── retrieval_engine.py
+│   ├── main.py                     # FastAPI REST API controller & background task manager
+│   ├── requirements.txt            # Backend dependencies
+│   ├── src/
+│   │   ├── config.py               # Pydantic environment configuration
+│   │   ├── analysis_engine.py      # Core orchestrator: coordinates parsing, graph, analysis & caching
+│   │   ├── analysis/
+│   │   │   └── confidence_analyzer.py  # Evaluates confidence and failure modes of architectural claims
+│   │   ├── graph/
+│   │   │   ├── analyzers.py        # PatternDetector (8 patterns) & CouplingAnalyzer (metrics & risk)
+│   │   │   ├── blast_radius.py     # Change impact simulation (Delete, Move, Modify)
+│   │   │   ├── dependency_mapper.py# In-memory NetworkX DiGraph builder & cycle detector
+│   │   │   ├── function_graph.py   # Function-level call graph builder for visualization
+│   │   │   ├── graph_db.py         # Neo4j Cypher DAL for nodes, relationships & multi-hop queries
+│   │   │   └── version_tracker.py  # SHA-256 versioning, Git history ingestion & tamper detection
+│   │   ├── parser/
+│   │   │   ├── repo_loader.py      # Git cloning, local folder path validation & file filtering
+│   │   │   └── static_parser.py    # Tree-sitter AST parser (Python, JS) with OOP method extraction
+│   │   ├── reasoning/
+│   │   │   └── llm_reasoner.py     # Groq API integration (Llama-3.3-70B) for architectural synthesis
+│   │   └── retrieval/
+│   │       ├── graphify_retriever.py # Graphify CLI interface for AST knowledge extraction
+│   │       └── retrieval_engine.py # Hybrid Graphify + Neo4j evidence retrieval engine
 └── frontend/
     └── src/
-        ├── App.js
-        ├── index.js
-        ├── App.css
+        ├── App.js                  # Master application component & tab controller
         ├── components/
-        │   ├── AnalyzeRepo.js
-        │   ├── ArchitectureComparison.js
-        │   ├── ArchitectureView.js
-        │   ├── BlastRadius.js
-        │   ├── ConfidenceReport.js
-        │   ├── CouplingAnalysis.js
-        │   ├── DependencyGraph.js
-        │   ├── FileVersionHistory.js
-        │   ├── FunctionAnalysis.js
-        │   ├── FunctionGraph.js
-        │   ├── Highlighter.js
-        │   ├── ImpactAnalysis.js
-        │   ├── PatternDetection.js
-        │   ├── RepositoryManager.js
-        │   └── SnapshotComparison.js
-        ├── services/
-        │   └── api.js
-        └── utils/
-            └── formatters.js
+        │   ├── AnalyzeRepo.js       # Repository input form (GitHub / Local Folder) with async polling
+        │   ├── ArchitectureView.js  # Macro/Meso/Micro architecture report viewer with dynamic layer stack
+        │   ├── BlastRadius.js       # Interactive blast radius simulator with D3 force graph
+        │   ├── CouplingAnalysis.js  # Coupling metrics dashboard, KPIs & circular dependency list
+        │   ├── DependencyGraph.js   # Force-directed D3.js file-to-file dependency graph
+        │   ├── FunctionAnalysis.js  # Function-level inspection, callers & LLM explanation
+        │   ├── FunctionGraph.js     # Force-directed D3.js function call chain visualization
+        │   ├── ImpactAnalysis.js    # AI-assisted change impact analysis report
+        │   ├── PatternDetection.js  # Detected architectural patterns, confidence gauges & breakdowns
+        │   ├── RepositoryManager.js # Analyzed repository catalog, version tracking & snapshot controls
+        │   └── SnapshotComparison.js# Cross-commit architectural diff & risk assessment comparison
+        └── services/
+            └── api.js              # Centralized Axios REST client
 ```
 
 ---
 
-## Backend Files
+## 📡 Complete REST API Reference
 
-### `backend/main.py`
-The FastAPI application entry point. Defines all REST API routes and wires them to the `AnalysisEngine`. Handles background job execution for long-running analysis tasks (cloning + parsing can take minutes), stores job state in an in-memory `jobs` dict, and exposes endpoints for every feature: analyze, patterns, coupling, blast radius, impact, functions, snapshots, version history, and graph data. Also spawns a subprocess-based OS folder picker dialog via `/browse-folder`.
-
-### `backend/src/config.py`
-Loads environment variables from `.env` using Pydantic Settings. Provides a single `settings` object consumed across the backend for Neo4j credentials, Groq API key, and file size limits. Centralizing config here prevents scattered `os.getenv()` calls.
-
-### `backend/src/analysis_engine.py`
-The central orchestrator — the most important file in the backend. Coordinates the full analysis pipeline:
-1. Clone or load the repo via `RepositoryLoader`
-2. Parse files with `StaticParser`
-3. Store nodes/edges in Neo4j via `GraphDB`
-4. Build an in-memory NetworkX graph via `DependencyMapper`
-5. Supplement edges with Graphify's AST-resolved imports
-6. Detect patterns and coupling via `PatternDetector` / `CouplingAnalyzer`
-7. Generate LLM architecture explanation via `LLMReasoner`
-8. Cache everything in Neo4j Snapshot nodes to avoid re-running LLM on unchanged commits
-
-Also manages an LRU in-memory cache (100 entries, thread-safe with `Lock`) for architecture and impact explanations, and handles snapshot comparison, blast radius delegation, and function analysis.
-
----
-
-### `backend/src/parser/repo_loader.py`
-Handles repository ingestion. `clone_repository()` runs `git clone --depth 1` into a local `workspace/` directory. `use_local_path()` validates a local directory without cloning. `scan_files()` recursively finds `.py`, `.js`, `.jsx`, `.ts`, `.tsx`, and `.java` files while excluding `node_modules`, `venv`, `__pycache__`, `.git`, `dist`, and `build` directories.
-
-### `backend/src/parser/static_parser.py`
-Performs AST-based static analysis using Tree-sitter. For each file it extracts:
-- **Classes** — class definition nodes with name and line number
-- **Functions** — function/method definitions with name and line number
-- **Imports** — `import` and `from ... import` statements (Python), plus imports and re-exports (JavaScript/TypeScript)
-- **Function calls** — all call expressions in the file
-- **Function-to-function calls** — which function body contains which calls (used to build the call graph)
-
-Supports Python, JavaScript, TypeScript, and TSX. Java files are scanned for file presence but not deeply parsed (no Tree-sitter Java grammar registered).
+| Method | Route | Description |
+|---|---|---|
+| `POST` | `/analyze` | Initiates background analysis of a remote GitHub repository. |
+| `POST` | `/analyze/local` | Initiates background analysis of a local directory on the host machine. |
+| `GET` | `/status/{job_id}` | Polls the current processing state (`processing`, `completed`, `failed`). |
+| `GET` | `/browse-folder` | Opens a native OS folder picker dialog to select local repositories. |
+| `GET` | `/architecture?repo_id={id}` | Returns the synthesized 3-tier architectural report and structural stats. |
+| `GET` | `/patterns?repo_id={id}` | Returns detected architectural patterns, layer breakdowns, and confidence scores. |
+| `GET` | `/coupling?repo_id={id}` | Returns high-coupling files, Fan-In/Fan-Out metrics, and dependency cycles. |
+| `GET` | `/confidence-report?repo_id={id}` | Returns confidence ratings, reasoning, and failure scenarios for architectural claims. |
+| `GET` | `/blast-radius/{file_path}?change_type={t}&repo_id={id}` | Returns direct/indirect dependents, affected functions, and simulated risk score. |
+| `POST` | `/impact` | Returns AI semantic impact analysis for a specific file and change type. |
+| `GET` | `/graph/data?repo_id={id}` | Returns node and edge collections for file dependency graph visualization. |
+| `GET` | `/graph/functions?repo_id={id}` | Returns node and edge collections for function call graph visualization. |
+| `GET` | `/graph/function/{name}?repo_id={id}` | Returns the call chain for a specific target function. |
+| `GET` | `/functions?repo_id={id}` | Lists all indexed functions with their source files and line locations. |
+| `GET` | `/function/{name}` | Returns callers, implementation code, and AI explanation for a function. |
+| `GET` | `/repositories` | Lists all analyzed repositories with snapshot and file counts. |
+| `POST` | `/repository/{repo_id}/load` | Loads a repository's cached analysis state into memory. |
+| `DELETE` | `/repository/{repo_id}` | Deletes a repository and all associated graph nodes and snapshots. |
+| `GET` | `/repository/{repo_id}/snapshots` | Lists all historical analysis snapshots for a repository. |
+| `GET` | `/repository/{repo_id}/compare-snapshots/{s1}/{s2}` | Performs full architectural, coupling, and dependency diff between two snapshots. |
+| `GET` | `/repository/{repo_id}/commits` | Returns the commit history lineage for a repository. |
+| `GET` | `/repository/{repo_id}/file-history?file_path={p}` | Returns the cryptographic SHA-256 version lineage for a file. |
+| `POST` | `/repository/{repo_id}/check-integrity?file_path={p}` | Compares current file content hash against stored hash to detect out-of-band tampering. |
 
 ---
 
-### `backend/src/graph/graph_db.py`
-The Neo4j data access layer. Manages all Cypher queries for creating and querying the knowledge graph. Key responsibilities:
-- Creates `File`, `Class`, `Function`, `Module`, `Repository`, `Snapshot`, `Commit`, `Version`, and `User` nodes
-- Creates `CONTAINS`, `IMPORTS`, `DEPENDS_ON`, `CALLS`, `CALLS_TRANSITIVE`, `HAS_VERSION`, `VERSION_AT`, `HAS_SNAPSHOT`, `HAS_COMMIT`, `AUTHORED_BY`, and `PREVIOUS_COMMIT` relationships
-- Resolves file paths using multi-strategy matching (exact, suffix, normalized forward-slash) to handle cross-platform path differences
-- Provides `get_graph_data()` for visualization, `get_all_files()`, `get_all_functions()`, `get_function_callers()`, and `get_affected_files()` for analysis queries
+## 🖥️ User Interface Capabilities
 
-### `backend/src/graph/dependency_mapper.py`
-Builds and queries a NetworkX `DiGraph` in memory. During `build_graph()`, it first maps all file stems and relative paths to absolute paths, then creates directed edges for each import that resolves to a known file. Unresolved imports are added as external dependency nodes. Provides `detect_cycles()`, `calculate_fan_in/out()`, and `get_blast_radius()` using NetworkX algorithms. This graph is the primary input to `PatternDetector` and `CouplingAnalyzer`.
-
-### `backend/src/graph/analyzers.py`
-Contains two classes:
-
-**`PatternDetector`** — detects 8 architectural patterns from the NetworkX dependency graph (see [How Architectural Patterns Are Found](#how-architectural-patterns-are-found) below).
-
-**`CouplingAnalyzer`** — measures coupling metrics:
-- `_find_high_coupling()` — files where fan-in + fan-out exceeds a threshold (default 5)
-- `_detect_cycles()` — uses `nx.simple_cycles()` to find circular dependencies
-- `_calculate_metrics()` — computes total files, total dependencies, and average coupling ratio
-- `compute_structural_risk()` — scores a single file on a 0–100 scale using: `fan_in × 8 + fan_out × 5 + 30 (if in cycle) + bonuses`, capped at 100, then maps to low/medium/high/critical
-
-### `backend/src/graph/blast_radius.py`
-Computes the impact of changing a file. Uses Neo4j Cypher path queries (not NetworkX) for accuracy:
-- **Direct dependents** — files with a `DEPENDS_ON` edge pointing to the target (1 hop)
-- **Indirect dependents** — files reachable via `DEPENDS_ON*2..3` paths (2–3 hops, intentionally limited for relevance)
-- **Function impact** — functions defined in the file and their callers via `CALLS` relationships
-- **Risk scoring** — different formulas per change type: delete (30 pts per direct import + 20 per function caller), move (8 pts per direct import), modify (5 pts per total affected file)
-
-### `backend/src/graph/version_tracker.py`
-SHA-256 based version tracking. Creates `Repository`, `Snapshot`, `Commit`, `Version`, and `User` nodes in Neo4j. Key behaviors:
-- `create_repository()` — creates or reuses a repository node; creates a new Snapshot only if no snapshot exists for the current commit hash (prevents duplicates)
-- `track_file_version()` — hashes each file and creates a `Version` node linked to the current `Commit`; skips if the same hash already exists at this commit
-- `import_git_history()` — runs `git log` to backfill commit history and file versions for up to N commits
-- `detect_file_tampering()` — compares the stored SHA-256 hash against the current file content
-
-### `backend/src/graph/function_graph.py`
-Builds function-level call graph data for visualization. Queries Neo4j for all `Function` nodes and their `CALLS` relationships (both file→function and function→function). Returns nodes and edges in a format consumable by the frontend graph renderer, with each node tagged as `type: 'function'` or `type: 'file'`.
+1. **Analyze:** Dual-mode repository ingestion (Remote GitHub clone with shallow depth or native Local Folder selection).
+2. **Repository Manager:** Multi-repo workspace catalog with Git commit histories, contributor metrics, and integrity validation.
+3. **Pattern Detection:** Real-time visual cards for all 8 architectural styles with confidence bars, layer compositions, and component breakdowns.
+4. **Coupling Analysis:** System-wide average coupling score gauge, instability indices, circular dependency cycle listings, and per-module Fan-In/Fan-Out rankings.
+5. **Blast Radius & Impact Analysis:** Interactive change simulation (Modify/Delete/Move) with D3 force graph visualizer, risk severity score, and AI impact analysis.
+6. **Architecture View:** AI-synthesized system architecture breakdown with interactive layer stack visualizer, top directory distributions, and source citations.
+7. **File & Function Graphs:** Interactive, zoomable D3.js force-directed graphs with node search, neighbor highlighting, and call chain isolation.
+8. **Snapshot Comparison:** Automated cross-commit architectural diffing highlighting file growth, coupling shifts, and regression risks.
 
 ---
 
-### `backend/src/reasoning/llm_reasoner.py`
-Wraps the Groq API (llama-3.3-70b-versatile). Provides:
-- `explain_architecture_report()` — single consolidated LLM call that produces three sections (Overview, Modules, Key Files) from patterns, graph context, directory breakdown, code evidence, and optional Graphify structural context. Parses the `## Header` sections from the response.
-- `explain_impact_with_graph()` — generates a 2–3 sentence blast radius summary citing actual function/class names from Graphify
-- `explain_function()` — explains a function's purpose, usage, and impact from its code, callers, and context
-- Uses `temperature=0.3` for deterministic, factual outputs; `max_tokens=1200–2000` depending on the call
+## 🔒 Security & Performance Considerations
 
----
-
-### `backend/src/retrieval/graphify_retriever.py`
-Runs the `graphify` CLI on the repository to produce a `graphify-out/graph.json` knowledge graph, then provides query and lookup methods:
-- `index_repo()` — invokes `graphify update <path>` as a subprocess; loads cached `graph.json` if it already exists
-- `get_context_for_query()` — scores nodes by matching query tokens against node names, summaries, and file paths; boosts function/class/method nodes by 1.2×
-- `get_path_context()` — returns all functions, classes, and imports belonging to a specific file (used to enrich blast radius LLM prompts)
-- `get_dependency_edges()` — extracts file-to-file import edges from the graph to supplement the NetworkX dependency graph with Graphify's more accurate AST-resolved imports
-
-### `backend/src/retrieval/retrieval_engine.py`
-Combines Graphify structural search with Neo4j dependency context. `retrieve_evidence()` fetches top-K Graphify nodes for a query, then boosts nodes whose files appear in the Neo4j dependency/affected-files sets for a given context file. Returns a ranked evidence list (top 5) formatted for LLM prompts.
-
----
-
-### `backend/src/analysis/confidence_analyzer.py`
-Generates a confidence report for all architectural claims. For each detected pattern it produces:
-- A human-readable claim statement
-- A confidence score (0.0–1.0) taken directly from `PatternDetector`
-- Reasoning text explaining what evidence supports the claim
-- A failure scenario describing when the detection could be wrong (e.g., non-standard naming conventions)
-
-Also analyzes coupling confidence (fixed at 0.92 for high-coupling files) and circular dependency confidence (1.0 when a cycle is confirmed by Neo4j traversal).
-
-### `backend/src/api/commit_routes.py`
-An `APIRouter` with commit-specific endpoints (`/repository/{repo_id}/commits`, `/commit/{hash}/files`, `/compare/{commit1}/{commit2}`). These routes are defined separately for modularity but the same functionality is also inlined in `main.py`. Depends on the shared `engine.graph_db` instance.
-
----
-
-## Frontend Files
-
-### `frontend/src/index.js`
-React application entry point. Mounts `<App />` into the DOM.
-
-### `frontend/src/App.js`
-Root component. Manages global state: active tab, current repository ID/name, and refresh key. Renders the sticky header with the animated "ARCHITECH" scramble effect, the tab navigation bar, and the active tab's component. Passes `repoId` and callbacks down to child components.
-
-### `frontend/src/App.css`
-Global CSS variables and base styles (dark theme, color palette, typography, animations like `fade-in`).
-
-### `frontend/src/services/api.js`
-Centralized Axios API client. Every backend endpoint has a corresponding function here. Components import from this file rather than constructing URLs directly, making the base URL (`http://localhost:8000`) a single point of change.
-
-### `frontend/src/utils/formatters.js`
-Utility functions for display formatting: `formatFilePath()` trims long absolute paths to the last N segments, `getFileName()` extracts just the filename, and `formatEvidenceText()` shortens file paths embedded in LLM-generated text.
-
----
-
-### Frontend Components
-
-| Component | Purpose |
-|---|---|
-| `AnalyzeRepo.js` | Input form for GitHub URL or local path; triggers analysis job and polls `/status/{jobId}` until complete |
-| `RepositoryManager.js` | Lists all analyzed repositories; allows loading, deleting, and switching between repos |
-| `PatternDetection.js` | Displays detected architectural patterns with confidence bars and layer breakdowns |
-| `CouplingAnalysis.js` | Shows high-coupling files (fan-in/fan-out), circular dependency cycles, and coupling metrics |
-| `BlastRadius.js` | File selector + change type picker; displays direct/indirect dependents and risk score for a simulated change |
-| `ImpactAnalysis.js` | Similar to BlastRadius but focused on the LLM-generated impact explanation |
-| `ConfidenceReport.js` | Renders the confidence report: each architectural claim with its score, reasoning, and failure scenario |
-| `FunctionAnalysis.js` | Lists all functions; clicking one fetches callers, code, and an LLM explanation |
-| `ArchitectureView.js` | Displays the three-section LLM architecture report (Overview, Modules, Key Files) with structural stats |
-| `ArchitectureComparison.js` | Side-by-side comparison of architecture summaries between two commits |
-| `DependencyGraph.js` | Interactive force-directed graph of file-to-file dependencies using a graph visualization library |
-| `FunctionGraph.js` | Interactive graph of function call relationships |
-| `SnapshotComparison.js` | Lists snapshots for a repo; compares two selected snapshots showing file changes, coupling deltas, and pattern changes |
-| `FileVersionHistory.js` | Shows the version history of a specific file across commits |
-| `Highlighter.js` | Syntax highlighting utility component used within other views |
-
----
-
-## How Architectural Patterns Are Found
-
-Pattern detection happens in `PatternDetector` (`backend/src/graph/analyzers.py`) after the dependency graph is fully built. It uses a **multi-signal heuristic approach** — no ML model, no hardcoded rules per project. Each pattern is detected independently.
-
-### Signal Sources (per file/node)
-
-For every node in the NetworkX graph, the detector extracts four types of signals:
-
-1. **Filename stem** — e.g., `controller`, `service`, `repository`, `model`
-2. **Parent directory name** — e.g., `controllers/`, `adapters/`, `domain/`
-3. **Class and function names** — extracted from the parsed AST and stored as node attributes in the graph
-4. **Import statements** — framework imports like `fastapi`, `sqlalchemy`, `celery` are mapped to known layer/role sets
-
-### Node Classification
-
-Before pattern detection, each node is classified into a role using `_classify_node()`:
-
-- **Presentation** — matches keywords like `controller`, `route`, `view`, `api` in filename/directory/symbols, or imports from `flask`, `fastapi`, `django.views`, etc.
-- **Data** — matches `repository`, `dao`, `model`, `db`, `schema`, or imports from `sqlalchemy`, `pymongo`, `sqlite3`, etc.
-- **Business** — matches `service`, `engine`, `processor`, `pipeline`, or imports from `sklearn`, `torch`, `groq`, etc.
-
-### Pattern Detection Logic
-
-**Layered Architecture**
-Counts how many of the three layers (presentation, business, data) have at least one file. Checks for actual inter-layer dependency edges (e.g., presentation → business, business → data). Confidence: 0.85 if all 3 layers exist with valid edges, down to 0.5 for 2 layers without edges.
-
-**MVC**
-Separately identifies controllers (route/endpoint keywords + framework imports), models (model/schema/db keywords + ORM imports), and views (view/template/component keywords + render functions). Checks for controller→model dependency edges. Confidence: 0.9 with all three components and edges, 0.5 with only controllers and models.
-
-**Hexagonal (Ports & Adapters)**
-Looks for `port`, `interface`, `abstract` in filenames/classes for ports; `adapter`, `impl`, `connector` for adapters; `domain`, `core`, `entities` directories for domain. Checks domain isolation: domain nodes should have fewer than 30% of their outgoing edges pointing outside the domain+ports boundary. Confidence: 0.8 if isolated, 0.5 otherwise.
-
-**Event-Driven**
-Identifies event nodes (`event`, `message`, `signal` keywords or messaging library imports like `celery`, `kafka`, `rabbitmq`), publishers (`publish`, `emit`, `dispatch` functions), and subscribers (`subscribe`, `listen`, `consume` functions). Confidence: 0.75 with events + publishers + 2+ subscribers.
-
-**Pipe-Filter**
-Detects pipeline/stage nodes (`pipeline`, `stage`, `workflow` keywords or `luigi`, `airflow`, `prefect` imports) and filter/transform nodes (`filter`, `transform`, `mapper`, `reducer`). Checks for chaining edges between pipes and filters. Confidence: 0.8 with chaining and 2+ filters.
-
-**Client-Server**
-Identifies server nodes (server-side framework imports: `flask`, `fastapi`, `uvicorn`) and client nodes (HTTP client imports: `requests`, `axios`, `httpx`). Checks for client→server edges. Confidence: 0.8 with edges and 2+ servers.
-
-**Microkernel**
-Looks for core/kernel/registry/loader nodes and plugin/extension/middleware nodes. Checks for core↔plugin edges. Requires at least 2 plugins. Confidence: 0.8 with 3+ plugins and edges.
-
-**Microservices**
-Identifies service nodes (`service`, `svc` keywords or service discovery imports like `consul`, `grpc`) and gateway nodes. Requires at least 3 independent service nodes. Checks for inter-service edges. Confidence: 0.8 with gateway + inter-service communication.
-
-### Confidence Scores
-
-Each pattern returns a `confidence` value between 0.0 and 1.0. Higher confidence requires more corroborating signals (e.g., all three layers present AND inter-layer edges exist). The `ConfidenceAnalyzer` surfaces these scores to the user along with the reasoning and known failure modes (e.g., "fails if layers are not separated by directory structure or naming conventions").
-
----
-
-## Setup
-
-### Prerequisites
-- Python 3.10+
-- Node.js 18+
-- Neo4j Desktop (running locally on `bolt://localhost:7687`)
-- Git installed and on PATH
-- Groq API key
-
-### Backend
-
-```bash
-cd backend
-pip install -r requirements.txt
-# Create .env with:
-# NEO4J_URI=bolt://localhost:7687
-# NEO4J_USER=neo4j
-# NEO4J_PASSWORD=your_password
-# GROQ_API_KEY=your_groq_key
-uvicorn main:app --reload --port 8000
-```
-
-### Frontend
-
-```bash
-cd frontend
-npm install
-npm start
-```
-
-The app runs at `http://localhost:3000` and connects to the API at `http://localhost:8000`.
-
----
-
-## Analysis Pipeline (End-to-End)
-
-```
-User submits URL/path
-        ↓
-RepositoryLoader  →  clone or validate local path
-        ↓
-StaticParser      →  AST parse each .py/.js/.jsx/.ts/.tsx file
-                     extract classes, functions, imports, calls
-        ↓
-GraphDB           →  store File/Class/Function/Module nodes in Neo4j
-VersionTracker    →  track SHA-256 file versions per commit
-        ↓
-DependencyMapper  →  build NetworkX DiGraph from imports
-GraphifyRetriever →  run graphify CLI, merge AST-resolved edges
-        ↓
-GraphDB           →  persist DEPENDS_ON edges to Neo4j
-                     create transitive CALLS_TRANSITIVE relationships
-        ↓
-PatternDetector   →  detect 8 architectural patterns from NetworkX graph
-CouplingAnalyzer  →  compute fan-in/out, cycles, risk scores
-        ↓
-RetrievalEngine   →  fetch top-K Graphify nodes as LLM evidence
-LLMReasoner       →  single Groq call → Overview / Modules / Key Files
-        ↓
-AnalysisEngine    →  cache everything in Neo4j Snapshot node
-        ↓
-Frontend          →  display patterns, coupling, graphs, LLM report
-```
+* **Local Code Privacy:** Analysis is executed locally against host repositories. Only aggregated structural context and metadata summaries are transmitted to the LLM reasoning engine.
+* **Deterministic Caching:** SHA-256 commit hashing and Snapshot caching prevent redundant AST parsing and eliminate unnecessary LLM invocations on unchanged commits.
+* **Thread-Safe LRU In-Memory Cache:** Python `threading.Lock` and `collections.OrderedDict` guard the high-speed cache against multi-threaded request races.
+* **Process Isolation:** The folder dialog launcher executes via isolated subprocesses to prevent GUI thread conflicts with the asynchronous FastAPI/Uvicorn event loop.

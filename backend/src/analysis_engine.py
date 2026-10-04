@@ -3,6 +3,7 @@ from typing import Dict, List
 import logging
 import hashlib
 import subprocess
+import sys
 from threading import Lock
 from collections import OrderedDict
 from .parser.repo_loader import RepositoryLoader
@@ -22,6 +23,21 @@ logger = logging.getLogger(__name__)
 
 MAX_CACHE_SIZE = 100
 ARCHITECTURE_CACHE_VERSION = 2
+
+
+def _log_progress(current: int, total: int, label: str = "Processing"):
+    """Print a compact ASCII progress bar that is safe on Windows consoles."""
+    pct = current / total if total else 1
+    filled = int(30 * pct)
+    bar = '=' * filled + '-' * (30 - filled)
+    line = f"\r  {label} [{bar}] {current}/{total} ({pct * 100:.0f}%)"
+    try:
+        sys.stdout.write(line)
+        sys.stdout.flush()
+        if current >= total:
+            sys.stdout.write('\n')
+    except Exception:
+        pass
 
 class AnalysisEngine:
     def __init__(self):
@@ -242,8 +258,7 @@ class AnalysisEngine:
         logger.info(f"\n📝 Parsing {len(files)} files...")
         parsed_files = []
         for i, file_info in enumerate(files, 1):
-            if i % 5 == 1 or i == len(files):
-                logger.info(f"  [{i}/{len(files)}] Parsing: {file_info['relative_path']}")
+            _log_progress(i, len(files), "Parsing")
             parsed = self.parser.parse_file(
                 file_info['path'],
                 file_info['language']

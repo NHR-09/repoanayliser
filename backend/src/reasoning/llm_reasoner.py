@@ -6,8 +6,32 @@ from dotenv import load_dotenv
 load_dotenv()
 
 class LLMReasoner:
-    def __init__(self):
+    def __init__(self, model: Optional[str] = None):
         self.client = Groq(api_key=os.getenv("GROQ_API_KEY"))
+        self.model = model or os.getenv("GROQ_MODEL")
+        if not self.model:
+            self.model = self._resolve_default_model()
+
+    def _resolve_default_model(self) -> str:
+        preferred = [
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+            "qwen/qwen3.6-27b",
+            "llama-3.3-70b-versatile",
+            "llama-3.1-70b-versatile",
+            "llama-3.1-8b-instant",
+        ]
+        try:
+            available_models = {m.id for m in self.client.models.list().data}
+            for pref in preferred:
+                if pref in available_models:
+                    return pref
+            for m in available_models:
+                if not m.startswith("whisper") and "guard" not in m:
+                    return m
+        except Exception:
+            pass
+        return "openai/gpt-oss-120b"
     
     def explain_architecture(self, evidence: List[Dict]) -> Dict:
         prompt = self._build_architecture_prompt(evidence)
@@ -34,47 +58,6 @@ class LLMReasoner:
         prompt = self._build_function_prompt(function_name, function_info, callers, context, function_code)
         return self._call_llm(prompt)
     
-    def explain_meso_level(self, patterns: Dict, graph_context: str) -> str:
-        """Generate meso-level explanation with graph structure"""
-        prompt = f"""Analyze the module-level architecture based on detected patterns and graph structure.
-
-Detected Patterns:
-{self._format_patterns(patterns)}
-
-Graph Structure:
-{graph_context}
-
-Provide a detailed meso-level analysis covering:
-1. Module organization and responsibilities
-2. Layer separation and boundaries
-3. Key architectural components
-4. Module interaction patterns
-5. Design principles observed
-
-Be specific and cite the graph structure."""
-        return self._call_llm(prompt)
-    
-    def explain_micro_level(self, files: List[str], graph_data: Dict) -> str:
-        """Generate micro-level explanation with file details"""
-        # Filter out None values and extract filenames
-        file_summary = '\n'.join([f"- {(f or 'unknown').split('/')[-1]}" for f in files[:15] if f])
-        
-        prompt = f"""Analyze the file-level architecture details.
-
-Key Files:
-{file_summary}
-
-Dependency Count: {len(graph_data.get('edges', []))} relationships
-
-Provide a detailed micro-level analysis covering:
-1. Critical files and their roles
-2. File organization patterns
-3. Import/dependency patterns
-4. Code structure observations
-5. Key functions and classes
-
-Be concise and focus on the most important files."""
-        return self._call_llm(prompt)
     
     def explain_architecture_report(
         self,
@@ -95,12 +78,24 @@ Be concise and focus on the most important files."""
             else ""
         )
 
-        prompt = f"""You are analyzing a software repository. Based on the data below, provide a structured architecture report.
+        system_prompt = """You are a senior software architect performing a deep architectural review. Your job is to provide INSIGHTS, not summaries.
+
+CRITICAL RULES:
+1. Do NOT paraphrase the data back. Do NOT say "File X contains class Y and function Z" — that's useless restating.
+2. Instead, ANALYZE: Why is the system designed this way? What design decisions were made? What are the strengths and weaknesses?
+3. Explain HOW modules interact at a conceptual level: what data flows between them, what role each plays in the overall system.
+4. Identify architectural patterns and EXPLAIN why they matter for maintainability, scalability, and testability.
+5. For Key Files, explain WHY they are critical — what happens if they break? What is their architectural role?
+6. Use specific file, class, and function names as evidence for your observations — but use them to support insights, not as the insight itself.
+7. If a README/project description is provided, use it to understand the system's purpose and domain.
+8. Never use "likely", "probably", "may contain". State what you observe and what it means architecturally."""
+
+        user_prompt = f"""Analyze this repository's architecture. Provide deep architectural insights, not surface-level file listings.
 
 Detected Patterns:
 {patterns_text}
 
-Graph Structure:
+Structural Data:
 {graph_context}
 
 Directory Breakdown:
@@ -109,24 +104,31 @@ Directory Breakdown:
 Code Evidence:
 {evidence_text}{graphify_section}
 
-Respond with EXACTLY these 3 sections using the headers below. Keep each section to 3-5 sentences.
-Be specific — cite actual function names, class names, and file names from the evidence above.
+Respond with EXACTLY these 3 sections. Each section should be 4-6 sentences of genuine architectural insight.
 
 ## Overview
-(Overall architecture style, main patterns, and system purpose)
+Explain the system's purpose and overall architecture. What problem does it solve? What architectural style does it follow and WHY is that a good/bad fit? What are the major subsystems and how do they relate? Reference detected patterns and explain their implications.
 
 ## Modules
-(Key modules/layers, their responsibilities, and how they interact)
+For each major module/subsystem: What is its responsibility? What design decisions shape it (e.g., separation of concerns, encapsulation)? How do modules communicate — trace a specific data/control flow through the dependency edges. Identify any layering violations or tight coupling between modules that shouldn't be coupled.
 
 ## Key Files
-(Most critical files in the system and why they matter)"""
+Which files are architecturally critical and WHY? Don't just list hub files — explain their architectural ROLE: Are they orchestrators? Data gateways? Service facades? What risk do they pose (single points of failure, God objects)? What happens to the system if they are modified or removed?"""
         
-        response = self._call_llm_with_limit(prompt, max_tokens=1200)
+        response = self._execute_chat_completion(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.4,
+            max_tokens=2000
+        )
+        response_text = response.choices[0].message.content
         
         # Parse sections from response
         sections = {'overview': '', 'modules': '', 'key_files': ''}
         current = None
-        lines = response.split('\n')
+        lines = response_text.split('\n')
         for line in lines:
             lower = line.lower().strip()
             if '## overview' in lower or '**overview**' in lower:
@@ -147,7 +149,7 @@ Be specific — cite actual function names, class names, and file names from the
         
         # Fallback if parsing failed
         if not sections['overview'] and not sections['modules']:
-            sections['overview'] = response
+            sections['overview'] = response_text
         
         return sections
     
@@ -284,18 +286,28 @@ normal bullet lists, fenced code blocks, and Markdown tables only when a table
 materially improves clarity. Do not escape Markdown punctuation such as pipes,
 backticks, asterisks, or hyphens. Be concise and cite specific files."""
     
-    def _call_llm(self, prompt: str) -> str:
-        response = self.client.chat.completions.create(
-            model="openai/gpt-oss-120b",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=2000
-        )
-        return response.choices[0].message.content
-    
-    def _call_llm_with_limit(self, prompt: str, max_tokens: int = 1200) -> str:
-        response = self.client.chat.completions.create(
-            model="openai/gpt-oss-120b",
+    def _execute_chat_completion(self, messages: List[Dict], temperature: float = 0.3, max_tokens: int = 2000):
+        try:
+            return self.client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens
+            )
+        except Exception as e:
+            new_model = self._resolve_default_model()
+            if new_model and new_model != self.model:
+                self.model = new_model
+                return self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens
+                )
+            raise e
+
+    def _call_llm(self, prompt: str, max_tokens: int = 2000) -> str:
+        response = self._execute_chat_completion(
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=max_tokens

@@ -252,9 +252,9 @@ class BlastRadiusAnalyzer:
         """Assess risk of modifying a file"""
         total = len(direct) + len(indirect)
         
-        if total > 15:
+        if total >= 15:
             level = "high"
-        elif total > 8:
+        elif total >= 8:
             level = "medium"
         else:
             level = "low"

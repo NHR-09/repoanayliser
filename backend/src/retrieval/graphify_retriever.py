@@ -118,21 +118,68 @@ class GraphifyRetriever:
 
     def format_context_for_llm(self, nodes: List[Dict]) -> str:
         """
-        Format a list of Graphify nodes into a concise, LLM-readable string.
+        Format a list of Graphify nodes into a structured, LLM-readable string.
+        Groups nodes by file for better readability and includes signatures,
+        line numbers, and inter-node call relationships.
         """
         if not nodes:
             return "No structural context available."
 
-        lines = []
+        # Group nodes by file
+        by_file: Dict[str, List[Dict]] = {}
         for node in nodes:
-            ntype = node.get("type", "unknown")
-            name = node.get("name", "?")
-            file_ = node.get("file", "")
-            summary = node.get("summary", "") or node.get("docstring", "")
+            file_ = node.get("file", "") or "unknown"
+            file_label = Path(file_).name if file_ != "unknown" else "unknown"
+            by_file.setdefault(file_label, []).append(node)
 
-            file_label = f" [{Path(file_).name}]" if file_ else ""
-            summary_label = f" — {summary[:120]}" if summary else ""
-            lines.append(f"  • [{ntype}] {name}{file_label}{summary_label}")
+        lines = []
+        for file_label, file_nodes in by_file.items():
+            lines.append(f"\n  [{file_label}]")
+            for node in file_nodes:
+                ntype = node.get("type", "unknown")
+                name = node.get("name", "?")
+                line_num = node.get("line", "")
+                signature = node.get("signature", "")
+                summary = node.get("summary", "") or node.get("docstring", "")
+                parent = node.get("parent_class", "") or node.get("parent", "")
+
+                detail_parts = []
+                if parent:
+                    detail_parts.append(f"in {parent}")
+                if line_num:
+                    detail_parts.append(f"L{line_num}")
+                if signature:
+                    detail_parts.append(f"sig: {signature[:80]}")
+                if summary:
+                    detail_parts.append(summary[:100])
+
+                detail_str = f" — {', '.join(detail_parts)}" if detail_parts else ""
+                lines.append(f"    {ntype}: {name}{detail_str}")
+
+        # Add call relationships from edges
+        if self._edges:
+            # Build node-id to name lookup
+            id_to_name: Dict[str, str] = {}
+            for node in self._nodes:
+                nid = node.get("id") or node.get("node_id") or node.get("name")
+                if nid:
+                    id_to_name[str(nid)] = node.get("name", str(nid))
+
+            call_edges = []
+            for edge in self._edges:
+                etype = (edge.get("type") or edge.get("relation") or "").lower()
+                if etype in ("calls", "invokes", "uses", ""):
+                    src_id = str(edge.get("source") or edge.get("from") or "")
+                    tgt_id = str(edge.get("target") or edge.get("to") or "")
+                    src_name = id_to_name.get(src_id, "")
+                    tgt_name = id_to_name.get(tgt_id, "")
+                    if src_name and tgt_name and src_name != tgt_name:
+                        call_edges.append(f"    {src_name} → {tgt_name}")
+
+            if call_edges:
+                lines.append("\n  [Call Relationships]")
+                for ce in call_edges[:20]:
+                    lines.append(ce)
 
         return "\n".join(lines)
 

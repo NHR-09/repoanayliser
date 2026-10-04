@@ -254,7 +254,7 @@ class GraphDB:
         """Persist a complete parse with a fixed number of Aura round trips."""
         batch_size = batch_size or self.BULK_BATCH_SIZE
         files, classes, functions, imports = [], [], [], []
-        file_calls, function_calls = [], []
+        file_calls, function_calls, resolved_method_calls = [], [], []
 
         for parsed in parsed_files:
             if not parsed or not parsed.get('file'):
@@ -269,8 +269,17 @@ class GraphDB:
             classes.extend({
                 'file': file_path, 'name': item['name'], 'line': item.get('line', 0)
             } for item in parsed.get('classes', []) if item.get('name'))
+            method_parents = {
+                (item.get('method'), item.get('line')): item.get('class')
+                for item in parsed.get('class_methods', [])
+            }
             functions.extend({
-                'file': file_path, 'name': item['name'], 'line': item.get('line', 0)
+                'file': file_path,
+                'name': item['name'],
+                'line': item.get('line', 0),
+                'parent_class': method_parents.get(
+                    (item['name'], item.get('line', 0))
+                )
             } for item in parsed.get('functions', []) if item.get('name'))
             imports.extend({
                 'file': file_path, 'module': module
@@ -284,6 +293,22 @@ class GraphDB:
                 'callee': call.get('callee')
             } for call in parsed.get('function_to_function_calls', [])
               if call.get('caller') and call.get('callee'))
+            attribute_types = {
+                (item.get('class'), item.get('attr')): item.get('type')
+                for item in parsed.get('self_attributes', [])
+            }
+            for call in parsed.get('method_calls', []):
+                target_class = attribute_types.get(
+                    (call.get('caller_class'), call.get('target_attr'))
+                )
+                if target_class and call.get('caller_method') and call.get('target_method'):
+                    resolved_method_calls.append({
+                        'file': file_path,
+                        'caller_class': call.get('caller_class'),
+                        'caller': call.get('caller_method'),
+                        'target_class': target_class,
+                        'callee': call.get('target_method')
+                    })
 
         queries = [
             (files, """
@@ -309,7 +334,8 @@ class GraphDB:
                 UNWIND $rows AS item
                 MATCH (f:File {path: item.file})
                 MERGE (fn:Function {name: item.name, file: item.file})
-                SET fn.line = item.line
+                SET fn.line = item.line,
+                    fn.parent_class = item.parent_class
                 MERGE (f)-[:CONTAINS]->(fn)
             """),
             (imports, """
@@ -332,6 +358,20 @@ class GraphDB:
                 MATCH (source)-[:CONTAINS]->(caller:Function {name: item.caller})
                 MATCH (r)-[:CONTAINS]->(:File)-[:CONTAINS]->(callee:Function {name: item.callee})
                 MERGE (caller)-[:CALLS]->(callee)
+            """),
+            (resolved_method_calls, """
+                MATCH (r:Repository {repo_id: $repo_id})
+                UNWIND $rows AS item
+                MATCH (r)-[:CONTAINS]->(source:File {path: item.file})
+                MATCH (source)-[:CONTAINS]->(caller:Function {
+                    name: item.caller,
+                    parent_class: item.caller_class
+                })
+                MATCH (r)-[:CONTAINS]->(:File)-[:CONTAINS]->(callee:Function {
+                    name: item.callee,
+                    parent_class: item.target_class
+                })
+                MERGE (caller)-[:CALLS {resolution: 'oop'}]->(callee)
             """)
         ]
 
@@ -347,7 +387,8 @@ class GraphDB:
         return {
             'files': len(files), 'classes': len(classes),
             'functions': len(functions), 'imports': len(imports),
-            'file_calls': len(file_calls), 'function_calls': len(function_calls)
+            'file_calls': len(file_calls), 'function_calls': len(function_calls),
+            'resolved_method_calls': len(resolved_method_calls)
         }
 
     def bulk_create_dependencies(self, edges, source: str = None,
