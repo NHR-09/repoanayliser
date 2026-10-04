@@ -52,13 +52,100 @@ class StaticParser:
     
     def _extract_functions(self, node, code) -> List[Dict]:
         functions = []
-        if node.type in ('function_definition', 'function_declaration'):
-            functions.append({
-                'name': self._get_node_text(node.child_by_field_name('name'), code),
-                'line': node.start_point[0] + 1
-            })
-        for child in node.children:
-            functions.extend(self._extract_functions(child, code))
+        
+        def _walk(curr, current_class=None):
+            if curr.type in ('class_definition', 'class_declaration'):
+                cls_name = self._get_node_text(curr.child_by_field_name('name'), code)
+                body = curr.child_by_field_name('body')
+                if body:
+                    for ch in body.children:
+                        _walk(ch, current_class=cls_name)
+                return
+            
+            # Python function
+            if curr.type == 'function_definition':
+                fn_name = self._get_node_text(curr.child_by_field_name('name'), code)
+                if fn_name:
+                    functions.append({
+                        'name': fn_name,
+                        'line': curr.start_point[0] + 1,
+                        'parent_class': current_class
+                    })
+                body = curr.child_by_field_name('body')
+                if body:
+                    for ch in body.children:
+                        _walk(ch, current_class=current_class)
+                return
+
+            # JavaScript function declaration
+            if curr.type == 'function_declaration':
+                fn_name = self._get_node_text(curr.child_by_field_name('name'), code)
+                if fn_name:
+                    functions.append({
+                        'name': fn_name,
+                        'line': curr.start_point[0] + 1,
+                        'parent_class': current_class
+                    })
+                body = curr.child_by_field_name('body')
+                if body:
+                    for ch in body.children:
+                        _walk(ch, current_class=current_class)
+                return
+            
+            # JavaScript variable-assigned arrow or function expression: const foo = () => ...
+            if curr.type == 'variable_declarator':
+                val = curr.child_by_field_name('value')
+                if val and val.type in ('arrow_function', 'function_expression'):
+                    fn_name = self._get_node_text(curr.child_by_field_name('name'), code)
+                    if fn_name:
+                        functions.append({
+                            'name': fn_name,
+                            'line': curr.start_point[0] + 1,
+                            'parent_class': current_class
+                        })
+                    body = val.child_by_field_name('body')
+                    if body:
+                        for ch in body.children:
+                            _walk(ch, current_class=current_class)
+                    return
+            
+            # JavaScript class method: method_definition
+            if curr.type == 'method_definition':
+                fn_name = self._get_node_text(curr.child_by_field_name('name'), code)
+                if fn_name:
+                    functions.append({
+                        'name': fn_name,
+                        'line': curr.start_point[0] + 1,
+                        'parent_class': current_class
+                    })
+                val = curr.child_by_field_name('value') or curr
+                body = val.child_by_field_name('body') if val else None
+                if body:
+                    for ch in body.children:
+                        _walk(ch, current_class=current_class)
+                return
+
+            # JavaScript object method / property function: pair
+            if curr.type == 'pair':
+                val = curr.child_by_field_name('value')
+                if val and val.type in ('arrow_function', 'function_expression'):
+                    fn_name = self._get_node_text(curr.child_by_field_name('key'), code)
+                    if fn_name:
+                        functions.append({
+                            'name': fn_name,
+                            'line': curr.start_point[0] + 1,
+                            'parent_class': current_class
+                        })
+                    body = val.child_by_field_name('body')
+                    if body:
+                        for ch in body.children:
+                            _walk(ch, current_class=current_class)
+                    return
+
+            for ch in curr.children:
+                _walk(ch, current_class)
+
+        _walk(node)
         return functions
     
     def _extract_imports(self, node, code, language) -> List[str]:
@@ -109,28 +196,92 @@ class StaticParser:
         return code[node.start_byte:node.end_byte].decode('utf8')
     
     def _extract_function_to_function_calls(self, node, code, language) -> List[Dict]:
-        """Extract which functions call which other functions"""
-        result = []
-        
-        if language == 'python':
-            if node.type == 'function_definition':
-                func_name = self._get_node_text(node.child_by_field_name('name'), code)
-                calls = self._extract_function_calls(node, code, language)
-                for called in set(calls):
-                    result.append({'caller': func_name, 'callee': called})
-        elif language == 'javascript':
-            if node.type == 'function_declaration':
-                func_name = self._get_node_text(node.child_by_field_name('name'), code)
-                calls = self._extract_function_calls(node, code, language)
-                for called in set(calls):
-                    result.append({'caller': func_name, 'callee': called})
-        
-        for child in node.children:
-            if child.type in ('function_definition', 'function_declaration'):
-                continue  # Each nested function is handled in its own recursion pass
-            result.extend(self._extract_function_to_function_calls(child, code, language))
-        
-        return result
+        """Extract which functions call which other functions, respecting scope boundaries."""
+        results = []
+        func_types = {'function_definition', 'function_declaration', 'arrow_function', 'function_expression', 'method_definition'}
+
+        def _get_scoped_calls(scope_node):
+            """Get function calls made directly within scope_node, stopping at nested function boundaries."""
+            scoped_calls = []
+            
+            def _walk_calls(curr):
+                if curr != scope_node and curr.type in func_types:
+                    return  # Do not cross into nested function scopes
+                
+                if language == 'python' and curr.type == 'call':
+                    func_n = curr.child_by_field_name('function')
+                    if func_n:
+                        if func_n.type == 'identifier':
+                            scoped_calls.append(self._get_node_text(func_n, code))
+                        elif func_n.type == 'attribute':
+                            scoped_calls.append(self._get_node_text(func_n, code).split('.')[-1])
+                elif language == 'javascript' and curr.type == 'call_expression':
+                    func_n = curr.child_by_field_name('function')
+                    if func_n:
+                        if func_n.type == 'identifier':
+                            scoped_calls.append(self._get_node_text(func_n, code))
+                        elif func_n.type == 'member_expression':
+                            prop = func_n.child_by_field_name('property')
+                            if prop:
+                                scoped_calls.append(self._get_node_text(prop, code))
+                
+                for ch in curr.children:
+                    _walk_calls(ch)
+            
+            _walk_calls(scope_node)
+            return scoped_calls
+
+        def _walk_tree(curr, current_class=None):
+            if curr.type in ('class_definition', 'class_declaration'):
+                cls_name = self._get_node_text(curr.child_by_field_name('name'), code)
+                body = curr.child_by_field_name('body')
+                if body:
+                    for ch in body.children:
+                        _walk_tree(ch, current_class=cls_name)
+                return
+
+            fn_name = None
+            fn_body = None
+
+            if curr.type == 'function_definition':
+                fn_name = self._get_node_text(curr.child_by_field_name('name'), code)
+                fn_body = curr.child_by_field_name('body') or curr
+            elif curr.type == 'function_declaration':
+                fn_name = self._get_node_text(curr.child_by_field_name('name'), code)
+                fn_body = curr.child_by_field_name('body') or curr
+            elif curr.type == 'variable_declarator':
+                val = curr.child_by_field_name('value')
+                if val and val.type in ('arrow_function', 'function_expression'):
+                    fn_name = self._get_node_text(curr.child_by_field_name('name'), code)
+                    fn_body = val.child_by_field_name('body') or val
+            elif curr.type == 'method_definition':
+                fn_name = self._get_node_text(curr.child_by_field_name('name'), code)
+                val = curr.child_by_field_name('value') or curr
+                fn_body = val.child_by_field_name('body') if val else None
+            elif curr.type == 'pair':
+                val = curr.child_by_field_name('value')
+                if val and val.type in ('arrow_function', 'function_expression'):
+                    fn_name = self._get_node_text(curr.child_by_field_name('key'), code)
+                    fn_body = val.child_by_field_name('body') or val
+
+            if fn_name and fn_body:
+                calls = _get_scoped_calls(fn_body)
+                for callee in set(calls):
+                    results.append({
+                        'caller': fn_name,
+                        'callee': callee,
+                        'caller_class': current_class
+                    })
+                # Recurse for nested functions inside body
+                for ch in fn_body.children:
+                    _walk_tree(ch, current_class=current_class)
+                return
+
+            for ch in curr.children:
+                _walk_tree(ch, current_class)
+
+        _walk_tree(node)
+        return results
     
     # ─── OOP-Aware Extraction Methods ─────────────────────────────────────
     

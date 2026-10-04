@@ -1358,7 +1358,8 @@ class AnalysisEngine:
                     parsed['file'], 
                     call['caller'], 
                     call['callee'], 
-                    self.current_repo_id
+                    self.current_repo_id,
+                    caller_class=call.get('caller_class')
                 )
         
         # OOP Resolution: Resolve self.X.method() calls using attribute type info

@@ -268,9 +268,12 @@ class GraphDB:
                 if record and record['matched'] > 0:
                     logger.debug(f"✓ CALLS: {Path(from_file).name} -> {called_function}")
     
-    def create_function_to_function_call(self, from_file: str, caller_func: str, callee_func: str, repo_id: str = None):
+    def create_function_to_function_call(self, from_file: str, caller_func: str, callee_func: str, repo_id: str = None, caller_class: str = None):
         """Create CALLS relationship between two functions.
-        Both caller and callee must already exist as nodes connected to a File.
+        Prioritizes callee resolution in order:
+        1. Same file (local function)
+        2. Dependent/imported file (imported function)
+        3. Repository-wide function
         """
         normalized_from = self._normalize_path(from_file)
         with self.driver.session() as session:
@@ -280,33 +283,49 @@ class GraphDB:
                     MATCH (r:Repository {repo_id: $repo_id})-[:CONTAINS]->(f:File)
                     WHERE f.path = $from_file OR f.file_path = $from_file
                     MATCH (f)-[:CONTAINS]->(caller:Function {name: $caller_func})
-                    MATCH (r)-[:CONTAINS]->(:File)-[:CONTAINS]->(callee:Function {name: $callee_func})
-                    MERGE (caller)-[:CALLS]->(callee)
-                    RETURN count(callee) as matched
+                    WHERE ($caller_class IS NULL OR caller.parent_class = $caller_class OR caller.parent_class IS NULL)
+                    
+                    OPTIONAL MATCH (f)-[:CONTAINS]->(same_callee:Function {name: $callee_func})
+                    OPTIONAL MATCH (f)-[:DEPENDS_ON]->(:File)-[:CONTAINS]->(dep_callee:Function {name: $callee_func})
+                    OPTIONAL MATCH (r)-[:CONTAINS]->(:File)-[:CONTAINS]->(repo_callee:Function {name: $callee_func})
+                    
+                    WITH caller, COALESCE(same_callee, dep_callee, repo_callee) AS chosen_callee
+                    WHERE chosen_callee IS NOT NULL
+                    WITH caller, head(collect(DISTINCT chosen_callee)) AS target_callee
+                    MERGE (caller)-[:CALLS]->(target_callee)
+                    RETURN count(target_callee) as matched
                     """,
                     repo_id=repo_id,
                     from_file=normalized_from,
                     caller_func=caller_func,
-                    callee_func=callee_func
+                    callee_func=callee_func,
+                    caller_class=caller_class
                 )
                 record = result.single()
                 if record and record['matched'] > 0:
                     logger.debug(f"✓ {caller_func} -> {callee_func}")
             else:
-                # Non-repo mode: require callee to be contained in SOME file
-                # (prevents creating edges to orphaned/global function nodes)
                 result = session.run(
                     """
                     MATCH (f:File)
                     WHERE f.path = $from_file OR f.file_path = $from_file
                     MATCH (f)-[:CONTAINS]->(caller:Function {name: $caller_func})
-                    MATCH (:File)-[:CONTAINS]->(callee:Function {name: $callee_func})
-                    MERGE (caller)-[:CALLS]->(callee)
-                    RETURN count(callee) as matched
+                    WHERE ($caller_class IS NULL OR caller.parent_class = $caller_class OR caller.parent_class IS NULL)
+                    
+                    OPTIONAL MATCH (f)-[:CONTAINS]->(same_callee:Function {name: $callee_func})
+                    OPTIONAL MATCH (f)-[:DEPENDS_ON]->(:File)-[:CONTAINS]->(dep_callee:Function {name: $callee_func})
+                    OPTIONAL MATCH (:File)-[:CONTAINS]->(repo_callee:Function {name: $callee_func})
+                    
+                    WITH caller, COALESCE(same_callee, dep_callee, repo_callee) AS chosen_callee
+                    WHERE chosen_callee IS NOT NULL
+                    WITH caller, head(collect(DISTINCT chosen_callee)) AS target_callee
+                    MERGE (caller)-[:CALLS]->(target_callee)
+                    RETURN count(target_callee) as matched
                     """,
                     from_file=normalized_from,
                     caller_func=caller_func,
-                    callee_func=callee_func
+                    callee_func=callee_func,
+                    caller_class=caller_class
                 )
                 record = result.single()
                 if record and record['matched'] > 0:
