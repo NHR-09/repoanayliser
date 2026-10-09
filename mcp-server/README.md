@@ -50,7 +50,33 @@ Use absolute paths. Replace `C:\path\to\AI-CP` with this repository’s absolute
 
 ### Codex
 
-Add a local MCP server in Codex settings with:
+Add the local stdio server from a terminal:
+
+```powershell
+codex mcp add architech -- C:\path\to\AI-CP\mcp-server\.venv\Scripts\python.exe C:\path\to\AI-CP\mcp-server\server.py
+```
+
+Verify it with `codex mcp list`. Alternatively, add this to `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.architech]
+command = "C:\\path\\to\\AI-CP\\mcp-server\\.venv\\Scripts\\python.exe"
+args = ["C:\\path\\to\\AI-CP\\mcp-server\\server.py"]
+```
+
+Restart Codex, if it is already running, and ask it to call `list_repositories`.
+
+### Claude Code
+
+```powershell
+claude mcp add --transport stdio architech -- C:\path\to\AI-CP\mcp-server\.venv\Scripts\python.exe C:\path\to\AI-CP\mcp-server\server.py
+```
+
+Verify with `claude mcp list`.
+
+### Antigravity
+
+In the IDE, open the agent panel’s **MCP Servers** menu, choose **Manage MCP Servers**, then **View raw config**. Add this entry to either the workspace `.agents/mcp_config.json` or the global `~/.gemini/config/mcp_config.json`:
 
 ```json
 {
@@ -63,35 +89,16 @@ Add a local MCP server in Codex settings with:
 }
 ```
 
-Restart Codex and ask it to call `list_repositories`.
-
-### Claude Code
-
-```powershell
-claude mcp add --transport stdio architech -- C:\path\to\AI-CP\mcp-server\.venv\Scripts\python.exe C:\path\to\AI-CP\mcp-server\server.py
-```
-
-Verify with `claude mcp list`.
-
-### Antigravity
-
-In Antigravity’s MCP settings, add a local/stdio server:
-
-- Name: `architech`
-- Command: `C:\path\to\AI-CP\mcp-server\.venv\Scripts\python.exe`
-- Arguments: `C:\path\to\AI-CP\mcp-server\server.py`
-
-Save and reload the workspace.
+Save and reload the workspace. In Antigravity CLI, `/mcp` opens the MCP manager and shows the server connection status.
 
 ### GitHub Copilot (VS Code)
 
-Add this to the workspace MCP configuration, normally `.vscode/mcp.json`:
+For new configurations, create `.mcp.json` in the repository root (the portable format preferred by current VS Code and Copilot):
 
 ```json
 {
-  "servers": {
+  "mcpServers": {
     "architech": {
-      "type": "stdio",
       "command": "C:\\path\\to\\AI-CP\\mcp-server\\.venv\\Scripts\\python.exe",
       "args": ["C:\\path\\to\\AI-CP\\mcp-server\\server.py"]
     }
@@ -99,7 +106,7 @@ Add this to the workspace MCP configuration, normally `.vscode/mcp.json`:
 }
 ```
 
-Start or restart the server from VS Code’s MCP controls, then enable it for Copilot Chat. Do not commit credentials in `.vscode/mcp.json`; this server reads the password from `backend/.env`.
+Run **MCP: Add Server** from the Command Palette or start the configured server through VS Code’s MCP controls, then enable it in Copilot Chat’s tool picker. VS Code still supports `.vscode/mcp.json` with a top-level `servers` object for compatibility. Do not commit credentials in either configuration file; this server reads the password from `backend/.env`.
 
 ## Recommended first-use flow
 
