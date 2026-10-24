@@ -2,11 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { hrApi } from '../../services/hrApi';
 import QuestionBankTable from './QuestionBankTable';
 import RepositoryLibrary from './RepositoryLibrary';
+import AssessmentList from '../assessment/AssessmentList';
 
 export default function HrStudio({ currentUser }) {
   const [organizations, setOrganizations] = useState([]);
   const [selectedOrgId, setSelectedOrgId] = useState('');
-  const [activeTab, setActiveTab] = useState('questions'); // 'questions' | 'repositories'
+  const [activeTab, setActiveTab] = useState('assessments'); // 'assessments' | 'questions' | 'repositories'
   const [loadingOrgs, setLoadingOrgs] = useState(true);
   const [orgError, setOrgError] = useState('');
 
@@ -62,16 +63,16 @@ export default function HrStudio({ currentUser }) {
           <div>
             <div style={styles.badgeRow}>
               <span style={styles.tagBlue}>HR ASSESSMENT STUDIO</span>
-              <span style={styles.tagZinc}>PHASE 3 ACTIVE</span>
+              <span style={styles.tagZinc}>PHASE 4 ACTIVE</span>
               {currentOrg && (
                 <span style={styles.tagGreen}>
                   {currentOrg.user_role || currentOrg.org_role || 'RECRUITER'}
                 </span>
               )}
             </div>
-            <h1 style={styles.studioTitle}>Question Bank & Approved Repository Library</h1>
+            <h1 style={styles.studioTitle}>Enterprise Assessment Studio & Repository Intelligence</h1>
             <p style={styles.studioSubtitle}>
-              Curate, generate, review, and approve real-world code questions grounded in verified AST codebases.
+              Create immutable assessments, evaluate candidate reasoning on real codebases, and review objective scorecards.
             </p>
           </div>
         </div>
@@ -115,6 +116,18 @@ export default function HrStudio({ currentUser }) {
       {/* Sub-Navigation Tabs */}
       <div style={styles.navTabs}>
         <button
+          onClick={() => setActiveTab('assessments')}
+          style={{
+            ...styles.navTabBtn,
+            ...(activeTab === 'assessments' ? styles.navTabBtnActive : {}),
+          }}
+        >
+          <span style={{ marginRight: '8px', fontSize: '15px' }}>🎯</span>
+          Enterprise Assessments
+          <span style={styles.tabBadge}>Studio & Scoring</span>
+        </button>
+
+        <button
           onClick={() => setActiveTab('questions')}
           style={{
             ...styles.navTabBtn,
@@ -146,9 +159,11 @@ export default function HrStudio({ currentUser }) {
             <span style={{ fontSize: '32px' }}>🔒</span>
             <h3 style={{ margin: '12px 0 6px', color: '#f8fafc' }}>Select an Authorized Organization</h3>
             <p style={{ margin: 0, color: '#94a3b8', fontSize: '14px', maxWidth: '480px' }}>
-              Your account must be provisioned with active HR or Owner permissions inside an organization to manage questions and approved repositories.
+              Your account must be provisioned with active HR or Owner permissions inside an organization to manage assessments, questions, and approved repositories.
             </p>
           </div>
+        ) : activeTab === 'assessments' ? (
+          <AssessmentList orgId={selectedOrgId} />
         ) : activeTab === 'questions' ? (
           <QuestionBankTable
             orgId={selectedOrgId}

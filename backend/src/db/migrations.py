@@ -409,10 +409,100 @@ ALTER TABLE repositories ADD COLUMN is_archived INTEGER DEFAULT 0;
 CREATE INDEX IF NOT EXISTS idx_repositories_approval ON repositories(approval_status);
 """
 
+MIGRATION_004_SQL = """
+-- 1. Assessment Versions (Immutable snapshot of published assessment)
+CREATE TABLE IF NOT EXISTS assessment_versions (
+    id TEXT PRIMARY KEY,
+    assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    organization_id TEXT NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    description TEXT,
+    instructions TEXT,
+    job_role TEXT,
+    repository_id TEXT REFERENCES repositories(id),
+    neo4j_repo_id TEXT,
+    analysis_commit TEXT,
+    mode TEXT NOT NULL CHECK(mode IN ('CURATED', 'RANDOMIZED')),
+    blueprint_config TEXT,
+    duration_minutes INTEGER NOT NULL DEFAULT 60,
+    passing_score_pct REAL DEFAULT 70.0,
+    result_release_policy TEXT NOT NULL DEFAULT 'WITHHOLD_PENDING_REVIEW' CHECK(result_release_policy IN ('IMMEDIATE', 'WITHHOLD_PENDING_REVIEW', 'RELEASE_SCORE_ONLY')),
+    questions_snapshot TEXT NOT NULL,
+    total_points REAL NOT NULL DEFAULT 0.0,
+    created_by TEXT REFERENCES users(id),
+    published_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(assessment_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_av_assessment ON assessment_versions(assessment_id);
+CREATE INDEX IF NOT EXISTS idx_av_org ON assessment_versions(organization_id);
+
+-- 2. Assessment Questions (Link table for curated question selection)
+CREATE TABLE IF NOT EXISTS assessment_questions (
+    id TEXT PRIMARY KEY,
+    assessment_id TEXT NOT NULL REFERENCES assessments(id) ON DELETE CASCADE,
+    question_id TEXT NOT NULL REFERENCES questions(id) ON DELETE RESTRICT,
+    question_version INTEGER DEFAULT 1,
+    order_index INTEGER DEFAULT 0,
+    points REAL DEFAULT 1.0,
+    UNIQUE(assessment_id, question_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_aq_assessment ON assessment_questions(assessment_id);
+
+-- 3. Extend assessments table
+ALTER TABLE assessments ADD COLUMN instructions TEXT;
+ALTER TABLE assessments ADD COLUMN skills_evaluated TEXT;
+ALTER TABLE assessments ADD COLUMN competencies_evaluated TEXT;
+ALTER TABLE assessments ADD COLUMN difficulty_profile TEXT;
+ALTER TABLE assessments ADD COLUMN availability_start TIMESTAMP;
+ALTER TABLE assessments ADD COLUMN availability_end TIMESTAMP;
+ALTER TABLE assessments ADD COLUMN result_release_policy TEXT DEFAULT 'WITHHOLD_PENDING_REVIEW';
+ALTER TABLE assessments ADD COLUMN max_attempts_per_candidate INTEGER DEFAULT 1;
+ALTER TABLE assessments ADD COLUMN is_archived INTEGER DEFAULT 0;
+ALTER TABLE assessments ADD COLUMN published_version_id TEXT;
+ALTER TABLE assessments ADD COLUMN created_by TEXT;
+
+-- 4. Extend assessment_assignments table
+ALTER TABLE assessment_assignments ADD COLUMN organization_id TEXT;
+ALTER TABLE assessment_assignments ADD COLUMN assessment_version_id TEXT;
+ALTER TABLE assessment_assignments ADD COLUMN claimed_at TIMESTAMP;
+ALTER TABLE assessment_assignments ADD COLUMN revoked_at TIMESTAMP;
+ALTER TABLE assessment_assignments ADD COLUMN revoked_by TEXT;
+ALTER TABLE assessment_assignments ADD COLUMN revoked_reason TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_assignments_org ON assessment_assignments(organization_id);
+
+-- 5. Extend assessment_attempts table
+ALTER TABLE assessment_attempts ADD COLUMN organization_id TEXT;
+ALTER TABLE assessment_attempts ADD COLUMN assessment_version_id TEXT;
+ALTER TABLE assessment_attempts ADD COLUMN candidate_email TEXT;
+ALTER TABLE assessment_attempts ADD COLUMN result_released INTEGER DEFAULT 0;
+ALTER TABLE assessment_attempts ADD COLUMN result_released_at TIMESTAMP;
+ALTER TABLE assessment_attempts ADD COLUMN result_released_by TEXT;
+ALTER TABLE assessment_attempts ADD COLUMN skill_breakdown TEXT;
+ALTER TABLE assessment_attempts ADD COLUMN competency_breakdown TEXT;
+ALTER TABLE assessment_attempts ADD COLUMN difficulty_breakdown TEXT;
+ALTER TABLE assessment_attempts ADD COLUMN manual_override_score REAL;
+ALTER TABLE assessment_attempts ADD COLUMN manual_override_by TEXT;
+ALTER TABLE assessment_attempts ADD COLUMN manual_override_reason TEXT;
+ALTER TABLE assessment_attempts ADD COLUMN manual_override_at TIMESTAMP;
+
+CREATE INDEX IF NOT EXISTS idx_attempts_assignment ON assessment_attempts(assignment_id);
+CREATE INDEX IF NOT EXISTS idx_attempts_version ON assessment_attempts(assessment_version_id);
+CREATE INDEX IF NOT EXISTS idx_attempts_org ON assessment_attempts(organization_id);
+
+-- 6. Extend attempt_answers table
+ALTER TABLE attempt_answers ADD COLUMN selected_options TEXT;
+ALTER TABLE attempt_answers ADD COLUMN scoring_details TEXT;
+"""
+
 ALL_MIGRATIONS = [
     ("001_initial_schema", MIGRATION_001_SQL),
     ("002_candidate_practice_schema", MIGRATION_002_SQL),
-    ("003_hr_question_bank_and_repo_library", MIGRATION_003_SQL)
+    ("003_hr_question_bank_and_repo_library", MIGRATION_003_SQL),
+    ("004_enterprise_assessments_schema", MIGRATION_004_SQL)
 ]
 
 def run_migrations(custom_path: Optional[str] = None):

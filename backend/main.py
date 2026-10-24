@@ -16,6 +16,8 @@ from src.db.connection import init_db
 from src.api.auth import router as auth_router
 from src.api.practice import router as practice_router, repo_service, evidence_service, gen_service
 from src.api.hr import router as hr_router, hr_repo_service, hr_gen_service
+from src.api.assessment_hr import router as assessment_hr_router
+from src.api.assessment_candidate import router as assessment_candidate_router
 
 app = FastAPI(title="ARCHITECH API")
 
@@ -34,6 +36,8 @@ def on_startup():
 app.include_router(auth_router)
 app.include_router(practice_router)
 app.include_router(hr_router)
+app.include_router(assessment_hr_router)
+app.include_router(assessment_candidate_router)
 
 engine = AnalysisEngine()
 repo_service._engine = engine

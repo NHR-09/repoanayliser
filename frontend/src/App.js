@@ -16,6 +16,8 @@ import AuthModal from './components/auth/AuthModal';
 import UserMenu from './components/auth/UserMenu';
 import CandidateDashboard from './components/practice/CandidateDashboard';
 import HrStudio from './components/hr/HrStudio';
+import CandidateAssignedAssessments from './components/assessment/CandidateAssignedAssessments';
+import AssessmentWorkspace from './components/assessment/AssessmentWorkspace';
 import { authService } from './services/auth';
 
 const repositoryLabel = (result, source) => {
@@ -39,6 +41,7 @@ function App() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authTestResult, setAuthTestResult] = useState(null);
   const [authTestLoading, setAuthTestLoading] = useState(false);
+  const [activeAssessmentAttempt, setActiveAssessmentAttempt] = useState(null);
 
   const handleAnalysisComplete = (result, source) => {
     setRefreshKey(prev => prev + 1);
@@ -68,6 +71,12 @@ function App() {
     authService.getMe()
       .then(user => setCurrentUser(user))
       .catch(() => setCurrentUser(null));
+
+    // Auto-navigate to assessments if invite token is in URL
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('invite')) {
+      setActiveTab('candidate-assessments');
+    }
   }, []);
 
   const handleAuthSuccess = (user) => {
@@ -79,6 +88,7 @@ function App() {
     await authService.logout();
     setCurrentUser(null);
     setAuthTestResult(null);
+    setActiveAssessmentAttempt(null);
   };
 
   const testEndpoint = async (type) => {
@@ -135,6 +145,7 @@ function App() {
 
   const tabs = [
     { id: 'story', label: 'Story Experience', icon: '▶' },
+    { id: 'candidate-assessments', label: 'My Assessments', icon: '📝' },
     { id: 'practice', label: 'Candidate Practice', icon: '🎯' },
     { id: 'hr-studio', label: 'HR Studio', icon: '🏢' },
     { id: 'architecture', label: 'Architecture', icon: '△' },
@@ -202,6 +213,48 @@ function App() {
       {/* Main Content */}
       <main style={styles.main}>
         <div className="fade-in" key={activeTab + refreshKey}>
+          {/* Phase 4 Candidate Assigned Assessments & Workspace */}
+          {activeTab === 'candidate-assessments' && (
+            activeAssessmentAttempt ? (
+              <AssessmentWorkspace
+                initialAttempt={activeAssessmentAttempt}
+                onExit={() => setActiveAssessmentAttempt(null)}
+              />
+            ) : currentUser ? (
+              <CandidateAssignedAssessments
+                onStartAttempt={(attempt) => setActiveAssessmentAttempt(attempt)}
+                onViewResult={() => {
+                  setActiveAssessmentAttempt(null);
+                }}
+              />
+            ) : (
+              <div style={styles.sectionCard}>
+                <div style={styles.cardHeader}>
+                  <span style={{ fontSize: '24px' }}>📝</span>
+                  <div>
+                    <h2 style={styles.cardTitle}>Enterprise Technical Assessments</h2>
+                    <p style={styles.cardSubtitle}>
+                      Repository-aware timed assessments assigned by hiring organizations with automated objective evaluation.
+                    </p>
+                  </div>
+                </div>
+
+                <div style={styles.infoBox}>
+                  <h3 style={styles.boxTitle}>Candidate Authentication Required</h3>
+                  <p style={styles.boxText}>
+                    Please sign in or register with the email address your invitation was sent to in order to claim and complete your technical assessment.
+                  </p>
+                  <button
+                    onClick={() => setIsAuthModalOpen(true)}
+                    style={styles.primaryBtn}
+                  >
+                    Sign In / Register as Candidate
+                  </button>
+                </div>
+              </div>
+            )
+          )}
+
           {/* Phase 2 Candidate Practice View */}
           {activeTab === 'practice' && (
             currentUser ? (
@@ -338,14 +391,18 @@ function App() {
                 )}
 
                 <div style={styles.workflowRoadmap}>
-                  <h4 style={styles.roadmapTitle}>Phase 3 HR Studio Live:</h4>
+                  <h4 style={styles.roadmapTitle}>Phase 3 & Phase 4 Enterprise Assessment Capabilities Live:</h4>
                   <ul style={styles.roadmapList}>
                     <li>✓ Organization-scoped HR Question Bank with multi-criteria search & filters</li>
                     <li>✓ Manual question authoring & editing with automated option/answer validation</li>
                     <li>✓ AI-assisted question generation (Skill-based Mode A & Repository Mode B)</li>
                     <li>✓ Formal question lifecycle (Needs Review → Approved → Published → Archived)</li>
-                    <li>✓ Immutable question version tracking with candidate preview mode</li>
                     <li>✓ Approved Repository Library with SSRF-protected registration & code coverage analytics</li>
+                    <li>✓ Enterprise Assessment Studio with Curated & Randomized Blueprint modes</li>
+                    <li>✓ Cryptographically hashed candidate invitation tokens with email-bound claims</li>
+                    <li>✓ Server-authoritative timed attempts with split-pane codebase explorer</li>
+                    <li>✓ Durably persisted autosave & recovery with client-redacted answer keys</li>
+                    <li>✓ Objective multi-format scoring with formula-injection-sanitized CSV exports</li>
                   </ul>
                 </div>
               </div>

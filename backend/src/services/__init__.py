@@ -7,6 +7,10 @@ from .practice_service import PracticeService
 from .hr_question_service import HRQuestionBankService
 from .hr_question_generation_service import HRQuestionGenerationService
 from .hr_repo_service import HRRepositoryLibraryService
+from .assessment_service import AssessmentService
+from .assessment_assignment_service import AssessmentAssignmentService
+from .assessment_attempt_service import AssessmentAttemptService
+from .assessment_analytics_service import AssessmentAnalyticsService
 
 __all__ = [
     "ResumeService",
@@ -17,5 +21,9 @@ __all__ = [
     "PracticeService",
     "HRQuestionBankService",
     "HRQuestionGenerationService",
-    "HRRepositoryLibraryService"
+    "HRRepositoryLibraryService",
+    "AssessmentService",
+    "AssessmentAssignmentService",
+    "AssessmentAttemptService",
+    "AssessmentAnalyticsService",
 ]
