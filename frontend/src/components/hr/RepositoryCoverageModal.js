@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { hrApi } from '../../services/hrApi';
 
 export default function RepositoryCoverageModal({
@@ -12,11 +12,7 @@ export default function RepositoryCoverageModal({
   const [error, setError] = useState('');
   const [coverage, setCoverage] = useState(null);
 
-  useEffect(() => {
-    loadCoverage();
-  }, [orgId, repoId]);
-
-  const loadCoverage = async () => {
+  const loadCoverage = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -27,7 +23,11 @@ export default function RepositoryCoverageModal({
     } finally {
       setLoading(false);
     }
-  };
+  }, [orgId, repoId]);
+
+  useEffect(() => {
+    loadCoverage();
+  }, [loadCoverage]);
 
   const totals = coverage?.totals || {};
   const compStats = coverage?.by_competency || {};

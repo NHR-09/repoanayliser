@@ -147,3 +147,19 @@ def revoke_session(raw_token: str, db_path: Optional[str] = None) -> bool:
             (token_digest,)
         )
         return cursor.rowcount > 0
+
+def revoke_all_user_sessions(user_id: str, db_path: Optional[str] = None) -> int:
+    """Revoke all active sessions for a specific user (e.g. on deactivation or security reset)."""
+    if not user_id:
+        return 0
+    with get_db_connection(db_path) as conn:
+        cursor = conn.execute(
+            """
+            UPDATE auth_sessions
+            SET revoked_at = CURRENT_TIMESTAMP
+            WHERE user_id = ? AND revoked_at IS NULL
+            """,
+            (user_id,)
+        )
+        return cursor.rowcount
+

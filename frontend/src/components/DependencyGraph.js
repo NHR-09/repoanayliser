@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as d3 from 'd3';
 import { api } from '../services/api';
 
@@ -7,11 +7,7 @@ export default function DependencyGraph({ repoId }) {
   const [graphData, setGraphData] = useState({ nodes: [], edges: [] });
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    loadGraphData();
-  }, [repoId]);
-
-  const loadGraphData = async () => {
+  const loadGraphData = useCallback(async () => {
     setLoading(true);
     try {
       const { data } = await api.getGraphData(repoId);
@@ -21,7 +17,11 @@ export default function DependencyGraph({ repoId }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [repoId]);
+
+  useEffect(() => {
+    loadGraphData();
+  }, [loadGraphData]);
 
   useEffect(() => {
     if (!loading && graphData && graphData.nodes && graphData.nodes.length > 0 && svgRef.current) {

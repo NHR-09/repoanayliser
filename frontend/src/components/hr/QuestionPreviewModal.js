@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { hrApi } from '../../services/hrApi';
 
 export default function QuestionPreviewModal({ orgId, questionId, onClose }) {
@@ -7,11 +7,7 @@ export default function QuestionPreviewModal({ orgId, questionId, onClose }) {
   const [preview, setPreview] = useState(null);
   const [selectedAnswers, setSelectedAnswers] = useState([]);
 
-  useEffect(() => {
-    loadPreview();
-  }, [orgId, questionId]);
-
-  const loadPreview = async () => {
+  const loadPreview = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -22,7 +18,11 @@ export default function QuestionPreviewModal({ orgId, questionId, onClose }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [orgId, questionId]);
+
+  useEffect(() => {
+    loadPreview();
+  }, [loadPreview]);
 
   const handleSelectOption = (key) => {
     if (preview?.response_format === 'MULTI_SELECT') {

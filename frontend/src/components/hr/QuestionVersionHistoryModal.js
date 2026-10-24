@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { hrApi } from '../../services/hrApi';
 
 export default function QuestionVersionHistoryModal({ orgId, questionId, onClose }) {
@@ -7,11 +7,7 @@ export default function QuestionVersionHistoryModal({ orgId, questionId, onClose
   const [versions, setVersions] = useState([]);
   const [selectedVersion, setSelectedVersion] = useState(null);
 
-  useEffect(() => {
-    loadVersions();
-  }, [orgId, questionId]);
-
-  const loadVersions = async () => {
+  const loadVersions = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -25,7 +21,11 @@ export default function QuestionVersionHistoryModal({ orgId, questionId, onClose
     } finally {
       setLoading(false);
     }
-  };
+  }, [orgId, questionId]);
+
+  useEffect(() => {
+    loadVersions();
+  }, [loadVersions]);
 
   return (
     <div style={styles.overlay}>

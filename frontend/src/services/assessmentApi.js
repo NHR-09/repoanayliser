@@ -1,14 +1,32 @@
 import axios from 'axios';
+import { getCookie } from './auth';
 
 const API_BASE = 'http://localhost:8000/api';
 
-// Create axios instance with credentials support
+// Create axios instance with credentials and token support
 const api = axios.create({
   baseURL: API_BASE,
   withCredentials: true,
   headers: {
     'Content-Type': 'application/json',
   },
+});
+
+api.interceptors.request.use((config) => {
+  const method = (config.method || '').toUpperCase();
+  if (['POST', 'PUT', 'DELETE', 'PATCH'].includes(method)) {
+    const csrfToken = getCookie('architech_csrf');
+    if (csrfToken) {
+      config.headers['X-CSRF-Token'] = csrfToken;
+    }
+  }
+
+  const token = localStorage.getItem('architech_token');
+  if (token && !config.headers['Authorization']) {
+    config.headers['Authorization'] = `Bearer ${token}`;
+  }
+
+  return config;
 });
 
 export const assessmentApi = {

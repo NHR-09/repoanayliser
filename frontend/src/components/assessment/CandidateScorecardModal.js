@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { assessmentApi } from '../../services/assessmentApi';
 
 export default function CandidateScorecardModal({ orgId, attemptId, onClose, onUpdated }) {
@@ -16,13 +16,7 @@ export default function CandidateScorecardModal({ orgId, attemptId, onClose, onU
   // Releasing result
   const [releasing, setReleasing] = useState(false);
 
-  useEffect(() => {
-    if (attemptId) {
-      loadScorecard();
-    }
-  }, [orgId, attemptId]);
-
-  const loadScorecard = async () => {
+  const loadScorecard = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -34,7 +28,13 @@ export default function CandidateScorecardModal({ orgId, attemptId, onClose, onU
     } finally {
       setLoading(false);
     }
-  };
+  }, [orgId, attemptId]);
+
+  useEffect(() => {
+    if (attemptId) {
+      loadScorecard();
+    }
+  }, [attemptId, loadScorecard]);
 
   const handleOverrideSubmit = async (e) => {
     e.preventDefault();

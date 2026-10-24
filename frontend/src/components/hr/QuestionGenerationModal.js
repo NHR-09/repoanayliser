@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { hrApi } from '../../services/hrApi';
 
 const COMPETENCIES = [
@@ -35,11 +35,7 @@ export default function QuestionGenerationModal({
   const [error, setError] = useState('');
   const [resultSummary, setResultSummary] = useState(null);
 
-  useEffect(() => {
-    loadApprovedRepositories();
-  }, [orgId]);
-
-  const loadApprovedRepositories = async () => {
+  const loadApprovedRepositories = useCallback(async () => {
     setLoadingRepos(true);
     try {
       const data = await hrApi.getRepositories(orgId, { pageSize: 50 });
@@ -47,15 +43,19 @@ export default function QuestionGenerationModal({
       setRepositories(repos);
       if (initialRepoId) {
         setSelectedRepoId(initialRepoId);
-      } else if (repos.length > 0 && !selectedRepoId) {
-        setSelectedRepoId(repos[0].id);
+      } else if (repos.length > 0) {
+        setSelectedRepoId((prev) => prev || repos[0].id);
       }
     } catch (err) {
       console.error('Failed to load repositories:', err);
     } finally {
       setLoadingRepos(false);
     }
-  };
+  }, [orgId, initialRepoId]);
+
+  useEffect(() => {
+    loadApprovedRepositories();
+  }, [loadApprovedRepositories]);
 
   const handleToggleCompetency = (id) => {
     if (selectedCompetencies.includes(id)) {

@@ -32,6 +32,14 @@ app.add_middleware(
 @app.on_event("startup")
 def on_startup():
     init_db()
+    try:
+        from src.services.resume_service import ResumeService
+        recovered = ResumeService().recover_interrupted_jobs()
+        if recovered > 0:
+            print(f"Startup: Recovered {recovered} interrupted resume processing jobs.")
+    except Exception as e:
+        print(f"Startup warning during job recovery: {e}")
+
 
 app.include_router(auth_router)
 app.include_router(practice_router)

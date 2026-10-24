@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { api } from '../services/api';
 import Highlighter from './Highlighter';
 import SearchableTreeSelect from './SearchableTreeSelect';
@@ -13,20 +13,20 @@ export default function BlastRadius({ repoId }) {
   const [files, setFiles] = useState([]);
   const svgRef = useRef();
 
-  const loadFiles = async () => {
+  const loadFiles = useCallback(async () => {
     try {
       const { data } = await api.getFiles(repoId);
       setFiles(data.files || []);
     } catch (error) {
       console.error(error);
     }
-  };
+  }, [repoId]);
 
-  React.useEffect(() => {
+  useEffect(() => {
     setFilePath('');
     setResult(null);
     loadFiles();
-  }, [repoId]);
+  }, [repoId, loadFiles]);
 
   const analyze = async () => {
     if (!filePath) return;

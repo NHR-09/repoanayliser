@@ -498,11 +498,36 @@ ALTER TABLE attempt_answers ADD COLUMN selected_options TEXT;
 ALTER TABLE attempt_answers ADD COLUMN scoring_details TEXT;
 """
 
+MIGRATION_005_SQL = """
+-- 1. Extend user_resumes for OCR metadata
+ALTER TABLE user_resumes ADD COLUMN extraction_method TEXT DEFAULT 'NATIVE_TEXT';
+ALTER TABLE user_resumes ADD COLUMN ocr_status TEXT DEFAULT 'COMPLETED';
+ALTER TABLE user_resumes ADD COLUMN ocr_metadata TEXT;
+ALTER TABLE user_resumes ADD COLUMN error_message TEXT;
+
+-- 2. Resume Processing Jobs (Persistent background queue / status)
+CREATE TABLE IF NOT EXISTS resume_jobs (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    filename TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('PENDING', 'RUNNING', 'COMPLETED', 'FAILED')),
+    extraction_method TEXT DEFAULT 'NATIVE_TEXT' CHECK(extraction_method IN ('NATIVE_TEXT', 'OCR')),
+    ocr_metadata TEXT,
+    error_message TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_jobs_user ON resume_jobs(user_id);
+CREATE INDEX IF NOT EXISTS idx_resume_jobs_status ON resume_jobs(status);
+"""
+
 ALL_MIGRATIONS = [
     ("001_initial_schema", MIGRATION_001_SQL),
     ("002_candidate_practice_schema", MIGRATION_002_SQL),
     ("003_hr_question_bank_and_repo_library", MIGRATION_003_SQL),
-    ("004_enterprise_assessments_schema", MIGRATION_004_SQL)
+    ("004_enterprise_assessments_schema", MIGRATION_004_SQL),
+    ("005_resume_ocr_and_reliability_schema", MIGRATION_005_SQL)
 ]
 
 def run_migrations(custom_path: Optional[str] = None):

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import * as d3 from 'd3';
 import { api } from '../services/api';
 import SearchableTreeSelect from './SearchableTreeSelect';
@@ -12,26 +12,16 @@ export default function FunctionGraph({ repoId }) {
   const [selectedFunction, setSelectedFunction] = useState('');
   const [functions, setFunctions] = useState([]);
 
-  useEffect(() => {
-    loadFunctions();
-    loadFunctionGraph();
-  }, [repoId]);
-
-  useEffect(() => {
-    if (!loading && svgRef.current) return renderGraph(graphData);
-    return undefined;
-  }, [graphData, loading]);
-
-  const loadFunctions = async () => {
+  const loadFunctions = useCallback(async () => {
     try {
       const { data } = await api.getFunctions(repoId);
       setFunctions(data.functions || []);
     } catch (error) {
       console.error('Failed to load functions:', error);
     }
-  };
+  }, [repoId]);
 
-  const loadFunctionGraph = async () => {
+  const loadFunctionGraph = useCallback(async () => {
     setLoading(true);
     try {
       const { data } = await api.getFunctionGraph(repoId);
@@ -40,7 +30,17 @@ export default function FunctionGraph({ repoId }) {
       console.error(error);
     }
     setLoading(false);
-  };
+  }, [repoId]);
+
+  useEffect(() => {
+    loadFunctions();
+    loadFunctionGraph();
+  }, [loadFunctions, loadFunctionGraph]);
+
+  useEffect(() => {
+    if (!loading && svgRef.current) return renderGraph(graphData);
+    return undefined;
+  }, [graphData, loading]);
 
   const loadFunctionCallChain = async (fn) => {
     setLoading(true);

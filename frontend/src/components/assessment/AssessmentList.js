@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { assessmentApi } from '../../services/assessmentApi';
 import AssessmentWizardModal from './AssessmentWizardModal';
 import CandidateAssignmentModal from './CandidateAssignmentModal';
@@ -19,13 +19,7 @@ export default function AssessmentList({ orgId }) {
   const [publishingId, setPublishingId] = useState(null);
   const [archivingId, setArchivingId] = useState(null);
 
-  useEffect(() => {
-    if (orgId) {
-      loadAssessments();
-    }
-  }, [orgId, statusFilter]);
-
-  const loadAssessments = async () => {
+  const loadAssessments = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -36,7 +30,13 @@ export default function AssessmentList({ orgId }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [orgId, statusFilter]);
+
+  useEffect(() => {
+    if (orgId) {
+      loadAssessments();
+    }
+  }, [orgId, statusFilter, loadAssessments]);
 
   const handlePublish = async (assessment) => {
     const confirmed = window.confirm(

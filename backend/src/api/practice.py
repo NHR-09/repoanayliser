@@ -87,7 +87,9 @@ async def upload_resume(
             "resume": resume_record,
             "extracted_skills": extraction_result["saved_skills"],
             "github_urls": extraction_result["extracted"].get("github_urls", []),
-            "projects": extraction_result["extracted"].get("projects", [])
+            "projects": extraction_result["extracted"].get("projects", []),
+            "extraction_method": resume_record.get("extraction_method", "NATIVE_TEXT"),
+            "ocr_metadata": resume_record.get("ocr_metadata")
         }
 
     except ValueError as ve:
@@ -95,6 +97,39 @@ async def upload_resume(
     except Exception as e:
         logger.error(f"Error handling resume upload for user {user_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to process resume upload.")
+
+@router.get("/resume/status/{job_id}")
+async def get_resume_job_status(
+    job_id: str,
+    current_user: Dict[str, Any] = Depends(require_user)
+):
+    """Query persistent processing status of a resume extraction job."""
+    job = resume_service.get_resume_job(job_id)
+    if not job or job["user_id"] != current_user["id"]:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Resume processing job not found.")
+    return {"job": job}
+
+@router.get("/resume/job")
+async def get_latest_resume_job(
+    current_user: Dict[str, Any] = Depends(require_user)
+):
+    """Retrieve the candidate's most recent resume extraction job status."""
+    job = resume_service.get_user_latest_job(current_user["id"])
+    return {"job": job}
+
+@router.get("/resume/ocr-capabilities")
+async def get_ocr_capabilities(
+    current_user: Dict[str, Any] = Depends(require_user)
+):
+    """Report OCR engine availability and supported languages."""
+    available = resume_service.ocr_service.is_available()
+    languages = resume_service.ocr_service.get_available_languages() if available else []
+    return {
+        "ocr_available": available,
+        "ocr_engine": "tesseract",
+        "supported_languages": languages,
+        "supported_extensions": [".pdf", ".docx", ".txt", ".png", ".jpg", ".jpeg", ".tiff", ".bmp", ".webp"]
+    }
 
 @router.get("/resume")
 async def get_resume(current_user: Dict[str, Any] = Depends(require_user)):

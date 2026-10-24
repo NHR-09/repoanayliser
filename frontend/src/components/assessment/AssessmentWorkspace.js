@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { assessmentApi } from '../../services/assessmentApi';
 
 export default function AssessmentWorkspace({ initialAttempt, onExit }) {
@@ -30,6 +30,24 @@ export default function AssessmentWorkspace({ initialAttempt, onExit }) {
   // Debounce ref for autosave
   const autosaveTimerRef = useRef({});
 
+  const handleSubmitAttempt = useCallback(async () => {
+    setSubmitting(true);
+    try {
+      const res = await assessmentApi.submitAttempt(attempt?.id);
+      setSubmitResult(res);
+      setShowSubmitModal(false);
+    } catch (err) {
+      alert(`Submission failed: ${err.response?.data?.detail || err.message}`);
+    } finally {
+      setSubmitting(false);
+    }
+  }, [attempt?.id]);
+
+  const handleAutoExpire = useCallback(async () => {
+    alert('⏱️ Assessment deadline has expired. Submitting your current answers.');
+    await handleSubmitAttempt();
+  }, [handleSubmitAttempt]);
+
   // Countdown timer effect
   useEffect(() => {
     if (remainingSeconds <= 0 || submitResult) {
@@ -53,18 +71,24 @@ export default function AssessmentWorkspace({ initialAttempt, onExit }) {
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [remainingSeconds, submitResult]);
+  }, [remainingSeconds, submitResult, isTimeExpired, handleAutoExpire]);
 
-  // Load codebase files on mount
-  useEffect(() => {
-    if (attempt?.id) {
-      loadCodebaseFiles();
+  const handleOpenFile = useCallback(async (filePath) => {
+    setSelectedFile(filePath);
+    setLoadingFile(true);
+    try {
+      const data = await assessmentApi.getAttemptCodebaseFileContent(attempt?.id, filePath);
+      setFileContent(data?.content || '');
+    } catch (err) {
+      setFileContent(`// Error loading file: ${err.response?.data?.detail || err.message}`);
+    } finally {
+      setLoadingFile(false);
     }
   }, [attempt?.id]);
 
-  const loadCodebaseFiles = async () => {
+  const loadCodebaseFiles = useCallback(async () => {
     try {
-      const data = await assessmentApi.getAttemptCodebaseFiles(attempt.id);
+      const data = await assessmentApi.getAttemptCodebaseFiles(attempt?.id);
       setRepoFiles(data?.files || []);
       if (data?.repo_name) {
         setRepoName(data.repo_name);
@@ -76,25 +100,14 @@ export default function AssessmentWorkspace({ initialAttempt, onExit }) {
     } catch (err) {
       console.warn('Could not load codebase files:', err);
     }
-  };
+  }, [attempt?.id, handleOpenFile]);
 
-  const handleOpenFile = async (filePath) => {
-    setSelectedFile(filePath);
-    setLoadingFile(true);
-    try {
-      const data = await assessmentApi.getAttemptCodebaseFileContent(attempt.id, filePath);
-      setFileContent(data?.content || '');
-    } catch (err) {
-      setFileContent(`// Error loading file: ${err.response?.data?.detail || err.message}`);
-    } finally {
-      setLoadingFile(false);
+  // Load codebase files on mount
+  useEffect(() => {
+    if (attempt?.id) {
+      loadCodebaseFiles();
     }
-  };
-
-  const handleAutoExpire = async () => {
-    alert('⏱️ Assessment deadline has expired. Submitting your current answers.');
-    await handleSubmitAttempt();
-  };
+  }, [attempt?.id, loadCodebaseFiles]);
 
   const triggerAutosave = (questionId, newResponse) => {
     setSaveStatus('saving');
@@ -135,19 +148,6 @@ export default function AssessmentWorkspace({ initialAttempt, onExit }) {
     }));
 
     triggerAutosave(questionId, updated);
-  };
-
-  const handleSubmitAttempt = async () => {
-    setSubmitting(true);
-    try {
-      const res = await assessmentApi.submitAttempt(attempt.id);
-      setSubmitResult(res);
-      setShowSubmitModal(false);
-    } catch (err) {
-      alert(`Submission failed: ${err.response?.data?.detail || err.message}`);
-    } finally {
-      setSubmitting(false);
-    }
   };
 
   const formatTimer = (sec) => {

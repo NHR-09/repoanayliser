@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { hrApi } from '../../services/hrApi';
 import RepositoryCoverageModal from './RepositoryCoverageModal';
 
@@ -19,13 +19,7 @@ export default function RepositoryLibrary({ orgId, onOpenGenerateForRepo }) {
   // Coverage Modal state
   const [coverageRepo, setCoverageRepo] = useState(null);
 
-  useEffect(() => {
-    if (orgId) {
-      loadRepositories();
-    }
-  }, [orgId]);
-
-  const loadRepositories = async () => {
+  const loadRepositories = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -36,7 +30,13 @@ export default function RepositoryLibrary({ orgId, onOpenGenerateForRepo }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [orgId]);
+
+  useEffect(() => {
+    if (orgId) {
+      loadRepositories();
+    }
+  }, [orgId, loadRepositories]);
 
   const handleRegisterSubmit = async (e) => {
     e.preventDefault();

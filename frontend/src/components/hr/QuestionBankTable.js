@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { hrApi } from '../../services/hrApi';
 import QuestionEditorModal from './QuestionEditorModal';
 import QuestionReviewModal from './QuestionReviewModal';
@@ -22,6 +22,7 @@ export default function QuestionBankTable({
 
   // Search & Filter state
   const [search, setSearch] = useState('');
+  const [appliedSearch, setAppliedSearch] = useState('');
   const [competency, setCompetency] = useState('');
   const [difficulty, setDifficulty] = useState('');
   const [responseFormat, setResponseFormat] = useState('');
@@ -44,22 +45,16 @@ export default function QuestionBankTable({
       setGenRepoId(initialGenRepoId);
       onClearGenTrigger();
     }
-  }, [initialOpenGen, initialGenRepoId]);
+  }, [initialOpenGen, initialGenRepoId, onClearGenTrigger]);
 
-  useEffect(() => {
-    if (orgId) {
-      loadQuestions();
-    }
-  }, [orgId, page, competency, difficulty, responseFormat, sourceType, reviewStatus, validationStatus]);
-
-  const loadQuestions = async () => {
+  const loadQuestions = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
       const data = await hrApi.getQuestions(orgId, {
         page,
         pageSize,
-        search,
+        search: appliedSearch,
         competency,
         difficulty,
         responseFormat,
@@ -75,16 +70,23 @@ export default function QuestionBankTable({
     } finally {
       setLoading(false);
     }
-  };
+  }, [orgId, page, pageSize, appliedSearch, competency, difficulty, responseFormat, sourceType, reviewStatus, validationStatus]);
+
+  useEffect(() => {
+    if (orgId) {
+      loadQuestions();
+    }
+  }, [orgId, loadQuestions]);
 
   const handleSearchSubmit = (e) => {
     e.preventDefault();
     setPage(1);
-    loadQuestions();
+    setAppliedSearch(search);
   };
 
   const handleClearFilters = () => {
     setSearch('');
+    setAppliedSearch('');
     setCompetency('');
     setDifficulty('');
     setResponseFormat('');

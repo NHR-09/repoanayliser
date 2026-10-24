@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { assessmentApi } from '../../services/assessmentApi';
 
 export default function CandidateAssignedAssessments({ onStartAttempt, onViewResult }) {
@@ -10,19 +10,7 @@ export default function CandidateAssignedAssessments({ onStartAttempt, onViewRes
   const [claimMessage, setClaimMessage] = useState('');
   const [startingId, setStartingId] = useState(null);
 
-  // Auto-check for invite token in URL (?invite=...)
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const inviteParam = params.get('invite');
-    if (inviteParam) {
-      setClaimToken(inviteParam);
-      handleAutoClaim(inviteParam);
-    } else {
-      loadAssignments();
-    }
-  }, []);
-
-  const loadAssignments = async () => {
+  const loadAssignments = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -33,9 +21,9 @@ export default function CandidateAssignedAssessments({ onStartAttempt, onViewRes
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const handleAutoClaim = async (token) => {
+  const handleAutoClaim = useCallback(async (token) => {
     setClaiming(true);
     setClaimMessage('');
     try {
@@ -50,7 +38,19 @@ export default function CandidateAssignedAssessments({ onStartAttempt, onViewRes
     } finally {
       setClaiming(false);
     }
-  };
+  }, [loadAssignments]);
+
+  // Auto-check for invite token in URL (?invite=...)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const inviteParam = params.get('invite');
+    if (inviteParam) {
+      setClaimToken(inviteParam);
+      handleAutoClaim(inviteParam);
+    } else {
+      loadAssignments();
+    }
+  }, [handleAutoClaim, loadAssignments]);
 
   const handleManualClaim = async (e) => {
     e.preventDefault();

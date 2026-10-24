@@ -85,9 +85,25 @@ class QuestionGenerationService:
                     saved_q = self._persist_question(q)
                     validated.append(saved_q)
             else:
-                logger.warning(f"Rejected generated question: {reason} | Text: {q.get('question_text', '')[:60]}")
+                logger.warning(f"Rejected generated question: {reason}")
 
         note = None
+        if len(validated) < target_count:
+            # Top-up from deterministic fallback questions to satisfy requested count
+            if mode == "REPOSITORY_BASED":
+                fallbacks = self._fallback_repo_questions(repo_id, neo4j_repo_id, analysis_version, packet, target_count)
+            else:
+                fallbacks = self._fallback_skill_questions(skill, diff, target_count)
+
+            for fb in fallbacks:
+                if len(validated) >= target_count:
+                    break
+                norm_text = re.sub(r"\W+", "", fb["question_text"].lower())
+                if norm_text not in seen_texts:
+                    seen_texts.add(norm_text)
+                    saved_q = self._persist_question(fb)
+                    validated.append(saved_q)
+
         if len(validated) < target_count:
             note = f"Generated and validated {len(validated)} questions (requested {target_count}) based on verified evidence."
 
@@ -549,6 +565,40 @@ Return ONLY a valid JSON object matching:
                 ],
                 "answer_key": ["B"],
                 "explanation": "Microservices should maintain autonomous databases and communicate via well-defined APIs or events.",
+                "evidence_references": []
+            },
+            {
+                "source_type": "SKILL_BASED",
+                "skill_tags": [skill],
+                "competency": "CODE_COMPREHENSION",
+                "difficulty": diff,
+                "response_format": "SINGLE_SELECT",
+                "question_text": f"When implementing robust error handling in {skill}, what is the recommended practice for catching exceptions?",
+                "options": [
+                    {"id": "A", "text": "Catching specific, expected exception types rather than broad catch-all handlers"},
+                    {"id": "B", "text": "Silently suppressing all runtime exceptions with empty catch blocks"},
+                    {"id": "C", "text": "Catching only OS-level segmentation faults"},
+                    {"id": "D", "text": "Terminating the parent host process immediately upon any warning"}
+                ],
+                "answer_key": ["A"],
+                "explanation": "Catching specific exceptions avoids masking unintended bugs and allows targeted recovery logic.",
+                "evidence_references": []
+            },
+            {
+                "source_type": "SKILL_BASED",
+                "skill_tags": [skill],
+                "competency": "DEPENDENCY_TRACING",
+                "difficulty": diff,
+                "response_format": "MULTI_SELECT",
+                "question_text": f"Which of the following strategies help prevent resource leaks when managing I/O connections in {skill}?",
+                "options": [
+                    {"id": "A", "text": "Using context managers or automatic resource cleanup blocks (e.g., try-finally/with)"},
+                    {"id": "B", "text": "Configuring explicit timeout limits on network sockets and database pools"},
+                    {"id": "C", "text": "Allocating infinite buffers and avoiding closing file descriptors"},
+                    {"id": "D", "text": "Spawning unmonitored background threads for each individual read operation"}
+                ],
+                "answer_key": ["A", "B"],
+                "explanation": "Context managers guarantee deterministic closure and timeouts prevent orphaned resource exhaustion.",
                 "evidence_references": []
             }
         ]

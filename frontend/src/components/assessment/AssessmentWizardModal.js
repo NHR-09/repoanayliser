@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { assessmentApi } from '../../services/assessmentApi';
 import { hrApi } from '../../services/hrApi';
 
@@ -61,14 +61,7 @@ export default function AssessmentWizardModal({ orgId, initialAssessment, onClos
   const [publishing, setPublishing] = useState(false);
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    loadRepositories();
-    if (mode === 'CURATED') {
-      loadPublishedQuestions();
-    }
-  }, [orgId, mode]);
-
-  const loadRepositories = async () => {
+  const loadRepositories = useCallback(async () => {
     setLoadingRepos(true);
     try {
       const data = await hrApi.getRepositories(orgId, { pageSize: 50 });
@@ -78,9 +71,9 @@ export default function AssessmentWizardModal({ orgId, initialAssessment, onClos
     } finally {
       setLoadingRepos(false);
     }
-  };
+  }, [orgId]);
 
-  const loadPublishedQuestions = async () => {
+  const loadPublishedQuestions = useCallback(async () => {
     setLoadingQuestions(true);
     try {
       const data = await hrApi.getQuestions(orgId, { reviewStatus: 'PUBLISHED', pageSize: 100 });
@@ -90,7 +83,14 @@ export default function AssessmentWizardModal({ orgId, initialAssessment, onClos
     } finally {
       setLoadingQuestions(false);
     }
-  };
+  }, [orgId]);
+
+  useEffect(() => {
+    loadRepositories();
+    if (mode === 'CURATED') {
+      loadPublishedQuestions();
+    }
+  }, [mode, loadRepositories, loadPublishedQuestions]);
 
   const handleToggleQuestion = (qid) => {
     if (selectedQuestionIds.includes(qid)) {

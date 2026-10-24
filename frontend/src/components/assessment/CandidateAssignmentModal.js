@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { assessmentApi } from '../../services/assessmentApi';
 
 export default function CandidateAssignmentModal({ orgId, assessment, onClose }) {
@@ -13,23 +13,23 @@ export default function CandidateAssignmentModal({ orgId, assessment, onClose })
   const [loadingExisting, setLoadingExisting] = useState(false);
   const [copiedToken, setCopiedToken] = useState(null);
 
-  useEffect(() => {
-    if (activeTab === 'existing') {
-      loadExistingAssignments();
-    }
-  }, [activeTab]);
-
-  const loadExistingAssignments = async () => {
+  const loadExistingAssignments = useCallback(async () => {
     setLoadingExisting(true);
     try {
-      const data = await assessmentApi.getAssignments(orgId, assessment.id);
+      const data = await assessmentApi.getAssignments(orgId, assessment?.id);
       setExistingAssignments(data || []);
     } catch (err) {
       console.error('Failed to load assignments:', err);
     } finally {
       setLoadingExisting(false);
     }
-  };
+  }, [orgId, assessment?.id]);
+
+  useEffect(() => {
+    if (activeTab === 'existing') {
+      loadExistingAssignments();
+    }
+  }, [activeTab, loadExistingAssignments]);
 
   const handleAssignSubmit = async (e) => {
     e.preventDefault();

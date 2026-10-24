@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { hrApi } from '../../services/hrApi';
 import QuestionBankTable from './QuestionBankTable';
 import RepositoryLibrary from './RepositoryLibrary';
@@ -14,11 +14,7 @@ export default function HrStudio({ currentUser }) {
   // Cross-component generation trigger
   const [genTrigger, setGenTrigger] = useState({ open: false, repoId: '' });
 
-  useEffect(() => {
-    loadOrganizations();
-  }, [currentUser]);
-
-  const loadOrganizations = async () => {
+  const loadOrganizations = useCallback(async () => {
     setLoadingOrgs(true);
     setOrgError('');
     try {
@@ -42,7 +38,11 @@ export default function HrStudio({ currentUser }) {
     } finally {
       setLoadingOrgs(false);
     }
-  };
+  }, [currentUser]);
+
+  useEffect(() => {
+    loadOrganizations();
+  }, [loadOrganizations]);
 
   const handleOpenGenerateForRepo = (repo) => {
     setGenTrigger({

@@ -8,8 +8,8 @@ import hashlib
 from datetime import datetime, timedelta, timezone
 
 from ..db.connection import get_db_connection
-from ..security.passwords import hash_password, verify_password, validate_password_strength
-from ..security.sessions import create_session, revoke_session
+from ..security.passwords import hash_password, verify_password, validate_password_strength, needs_rehash
+from ..security.sessions import create_session, revoke_session, revoke_all_user_sessions
 from ..security.rate_limiter import login_rate_limiter
 from ..security.dependencies import (
     extract_token_and_source,
@@ -359,6 +359,14 @@ async def login(req: LoginRequest, request: Request, response: Response):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Account is deactivated. Please contact an administrator."
+            )
+
+        # Transparently upgrade legacy or low-iteration password hashes to current OWASP guidance (600,000 iterations)
+        if needs_rehash(user["password_hash"]):
+            upgraded_hash = hash_password(req.password)
+            conn.execute(
+                "UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (upgraded_hash, user["id"])
             )
             
         # Clear failed attempts on successful authentication

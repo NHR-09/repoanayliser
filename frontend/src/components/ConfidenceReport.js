@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { getConfidenceReport } from '../services/api';
 
 const ConfidenceReport = ({ repoId }) => {
@@ -7,14 +7,16 @@ const ConfidenceReport = ({ repoId }) => {
   const [error, setError] = useState(null);
   const [expandedClaim, setExpandedClaim] = useState(null);
 
-  useEffect(() => { if (repoId) fetchReport(); }, [repoId]);
-
-  const fetchReport = async () => {
+  const fetchReport = useCallback(async () => {
     setLoading(true); setError(null);
     try { const data = await getConfidenceReport(repoId); setReport(data); }
     catch (err) { setError(err.message); }
     finally { setLoading(false); }
-  };
+  }, [repoId]);
+
+  useEffect(() => {
+    if (repoId) fetchReport();
+  }, [repoId, fetchReport]);
 
   const getConfidenceColor = (c) => c >= 0.8 ? '#4ade80' : c >= 0.6 ? '#fbbf24' : '#f87171';
   const getConfidenceLabel = (c) => c >= 0.8 ? 'High' : c >= 0.6 ? 'Medium' : 'Low';

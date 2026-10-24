@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '../services/api';
 
 function SnapshotComparison({ repoId }) {
@@ -8,11 +8,7 @@ function SnapshotComparison({ repoId }) {
   const [comparison, setComparison] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    if (repoId) loadSnapshots();
-  }, [repoId]);
-
-  const loadSnapshots = async () => {
+  const loadSnapshots = useCallback(async () => {
     try {
       setLoading(true);
       const response = await api.getSnapshots(repoId);
@@ -22,7 +18,11 @@ function SnapshotComparison({ repoId }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [repoId]);
+
+  useEffect(() => {
+    if (repoId) loadSnapshots();
+  }, [repoId, loadSnapshots]);
 
   const deleteSnapshot = async (snapshotId) => {
     if (!window.confirm('Delete this snapshot?')) return;

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '../services/api';
 import { formatEvidenceText } from '../utils/formatters';
 import MarkdownContent from './MarkdownContent';
@@ -9,7 +9,7 @@ export default function ArchitectureView({ repoId }) {
   const [cached, setCached] = useState(false);
   const [activeTab, setActiveTab] = useState('overview');
 
-  const loadArchitecture = async () => {
+  const loadArchitecture = useCallback(async () => {
     setLoading(true);
     setCached(false);
     try {
@@ -22,11 +22,11 @@ export default function ArchitectureView({ repoId }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [repoId]);
 
   useEffect(() => {
     loadArchitecture();
-  }, [repoId]);
+  }, [loadArchitecture]);
 
   if (loading) {
     return (

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { assessmentApi } from '../../services/assessmentApi';
 import CandidateScorecardModal from './CandidateScorecardModal';
 
@@ -8,11 +8,7 @@ export default function AssessmentResultsModal({ orgId, assessment, onClose }) {
   const [error, setError] = useState('');
   const [selectedAttemptId, setSelectedAttemptId] = useState(null);
 
-  useEffect(() => {
-    loadAttempts();
-  }, [orgId, assessment.id]);
-
-  const loadAttempts = async () => {
+  const loadAttempts = useCallback(async () => {
     setLoading(true);
     setError('');
     try {
@@ -23,7 +19,11 @@ export default function AssessmentResultsModal({ orgId, assessment, onClose }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [orgId, assessment.id]);
+
+  useEffect(() => {
+    loadAttempts();
+  }, [loadAttempts]);
 
   const handleExportCsv = () => {
     const url = assessmentApi.exportResultsCsvUrl(orgId, assessment.id);

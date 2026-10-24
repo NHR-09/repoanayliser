@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '../services/api';
 import { formatFilePath } from '../utils/formatters';
 import SearchableTreeSelect from './SearchableTreeSelect';
@@ -12,18 +12,18 @@ export default function ImpactAnalysis({ repoId }) {
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [error, setError] = useState(null);
 
+  const loadFiles = useCallback(async () => {
+    setLoadingFiles(true);
+    try { const { data } = await api.getFiles(repoId); setFiles(data.files || []); }
+    catch (err) { console.error('Failed to load files:', err); }
+    setLoadingFiles(false);
+  }, [repoId]);
+
   useEffect(() => {
     setFilePath('');
     setImpact(null);
     loadFiles();
-  }, [repoId]);
-
-  const loadFiles = async () => {
-    setLoadingFiles(true);
-    try { const { data } = await api.getFiles(repoId); setFiles(data.files || []); }
-    catch (error) { console.error('Failed to load files:', error); }
-    setLoadingFiles(false);
-  };
+  }, [repoId, loadFiles]);
 
   const analyzeImpact = async () => {
     if (!filePath) return;

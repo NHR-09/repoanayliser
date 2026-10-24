@@ -75,3 +75,20 @@ def verify_password(plain_password: str, stored_hash: str) -> bool:
         return hmac.compare_digest(computed_key, expected_key)
     except Exception:
         return False
+
+def needs_rehash(stored_hash: str, target_iterations: int = DEFAULT_ITERATIONS) -> bool:
+    """
+    Check if a stored password hash uses an outdated iteration count or algorithm.
+    Enables transparent, zero-downtime hash migration upon successful user login.
+    """
+    if not stored_hash:
+        return True
+    try:
+        parts = stored_hash.split("$")
+        if len(parts) != 4 or parts[0] != ALGORITHM:
+            return True
+        iterations = int(parts[1])
+        return iterations < target_iterations
+    except Exception:
+        return True
+
