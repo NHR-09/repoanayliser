@@ -252,8 +252,167 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 );
 """
 
+MIGRATION_002_SQL = """
+-- 1. User Resumes
+CREATE TABLE IF NOT EXISTS user_resumes (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    filename TEXT NOT NULL,
+    file_path TEXT NOT NULL,
+    file_size INTEGER NOT NULL,
+    mime_type TEXT NOT NULL,
+    raw_text TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_resumes_user ON user_resumes(user_id);
+
+-- 2. User Skills (Reviewed skills with provenance)
+CREATE TABLE IF NOT EXISTS user_skills (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    skill_name TEXT NOT NULL,
+    category TEXT NOT NULL CHECK(category IN ('LANGUAGE', 'FRAMEWORK', 'DATABASE', 'TOOL', 'ARCHITECTURE', 'AI_ML', 'OTHER')),
+    source TEXT NOT NULL CHECK(source IN ('RESUME', 'MANUAL')),
+    evidence_text TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, skill_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_skills_user ON user_skills(user_id);
+
+-- 3. Skill-to-Repository Evidence Mappings
+CREATE TABLE IF NOT EXISTS skill_evidence (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    skill_name TEXT NOT NULL,
+    repository_id TEXT NOT NULL REFERENCES repositories(id) ON DELETE CASCADE,
+    neo4j_repo_id TEXT NOT NULL,
+    analysis_version TEXT,
+    evidence_status TEXT NOT NULL CHECK(evidence_status IN ('CLAIMED_ONLY', 'CODE_EVIDENCE_FOUND', 'ASSESSMENT_EVIDENCE_FOUND', 'INSUFFICIENT_EVIDENCE')),
+    file_path TEXT,
+    entity_type TEXT,
+    entity_name TEXT,
+    line_number INTEGER,
+    evidence_description TEXT,
+    confidence_score REAL DEFAULT 1.0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_skill_evidence_user ON skill_evidence(user_id);
+CREATE INDEX IF NOT EXISTS idx_skill_evidence_repo ON skill_evidence(repository_id);
+CREATE INDEX IF NOT EXISTS idx_skill_evidence_skill ON skill_evidence(user_id, skill_name);
+
+-- 4. Repositories table additions for analysis status tracking
+ALTER TABLE repositories ADD COLUMN analysis_status TEXT DEFAULT 'PENDING';
+ALTER TABLE repositories ADD COLUMN last_analyzed_commit TEXT;
+ALTER TABLE repositories ADD COLUMN last_analyzed_at TIMESTAMP;
+ALTER TABLE repositories ADD COLUMN analysis_error TEXT;
+
+-- 5. Candidate Practice Quizzes
+CREATE TABLE IF NOT EXISTS practice_quizzes (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    mode TEXT NOT NULL CHECK(mode IN ('SKILL_BASED', 'REPOSITORY_BASED')),
+    skill_name TEXT,
+    repository_id TEXT REFERENCES repositories(id) ON DELETE SET NULL,
+    neo4j_repo_id TEXT,
+    difficulty TEXT NOT NULL CHECK(difficulty IN ('BEGINNER', 'INTERMEDIATE', 'ADVANCED')),
+    competencies TEXT NOT NULL, -- JSON array of strings
+    question_count INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'IN_PROGRESS' CHECK(status IN ('IN_PROGRESS', 'COMPLETED', 'ABANDONED')),
+    total_score REAL DEFAULT 0.0,
+    max_score REAL DEFAULT 0.0,
+    percentage_score REAL DEFAULT 0.0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_practice_quizzes_user ON practice_quizzes(user_id);
+
+-- 6. Practice Quiz Questions
+CREATE TABLE IF NOT EXISTS practice_quiz_questions (
+    quiz_id TEXT NOT NULL REFERENCES practice_quizzes(id) ON DELETE CASCADE,
+    question_id TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+    order_index INTEGER DEFAULT 0,
+    PRIMARY KEY(quiz_id, question_id)
+);
+
+-- 7. Practice Answers & Detailed Grading
+CREATE TABLE IF NOT EXISTS practice_answers (
+    id TEXT PRIMARY KEY,
+    quiz_id TEXT NOT NULL REFERENCES practice_quizzes(id) ON DELETE CASCADE,
+    question_id TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    selected_options TEXT NOT NULL, -- JSON array of selected IDs (e.g. ["A", "C"])
+    is_correct INTEGER NOT NULL,
+    awarded_points REAL DEFAULT 0.0,
+    max_points REAL DEFAULT 1.0,
+    explanation TEXT,
+    answered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(quiz_id, question_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_practice_answers_quiz ON practice_answers(quiz_id);
+CREATE INDEX IF NOT EXISTS idx_practice_answers_user ON practice_answers(user_id);
+"""
+
+MIGRATION_003_SQL = """
+-- 1. Validation status and review lifecycle fields for questions
+ALTER TABLE questions ADD COLUMN validation_status TEXT DEFAULT 'PENDING';
+ALTER TABLE questions ADD COLUMN reviewed_by TEXT;
+ALTER TABLE questions ADD COLUMN reviewed_at TIMESTAMP;
+ALTER TABLE questions ADD COLUMN reviewer_notes TEXT;
+ALTER TABLE questions ADD COLUMN parent_question_id TEXT;
+
+-- 2. Question Versions (Immutable version tracking for publication & review)
+CREATE TABLE IF NOT EXISTS question_versions (
+    id TEXT PRIMARY KEY,
+    question_id TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    organization_id TEXT REFERENCES organizations(id) ON DELETE SET NULL,
+    author_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+    reviewed_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    source_type TEXT NOT NULL,
+    repository_id TEXT,
+    neo4j_repo_id TEXT,
+    analysis_version TEXT,
+    skill_tags TEXT NOT NULL,
+    competency TEXT NOT NULL,
+    response_format TEXT NOT NULL,
+    difficulty TEXT NOT NULL,
+    question_text TEXT NOT NULL,
+    options TEXT NOT NULL,
+    answer_key TEXT NOT NULL,
+    explanation TEXT NOT NULL,
+    evidence_references TEXT,
+    validation_status TEXT NOT NULL,
+    review_status TEXT NOT NULL,
+    reviewer_notes TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(question_id, version)
+);
+
+CREATE INDEX IF NOT EXISTS idx_qv_question ON question_versions(question_id);
+CREATE INDEX IF NOT EXISTS idx_qv_org ON question_versions(organization_id);
+
+-- 3. Add HR repository library fields to repositories table
+ALTER TABLE repositories ADD COLUMN description TEXT;
+ALTER TABLE repositories ADD COLUMN approval_status TEXT DEFAULT 'REGISTERED';
+ALTER TABLE repositories ADD COLUMN approved_by TEXT;
+ALTER TABLE repositories ADD COLUMN approved_at TIMESTAMP;
+ALTER TABLE repositories ADD COLUMN intended_evaluations TEXT;
+ALTER TABLE repositories ADD COLUMN is_archived INTEGER DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS idx_repositories_approval ON repositories(approval_status);
+"""
+
 ALL_MIGRATIONS = [
-    ("001_initial_schema", MIGRATION_001_SQL)
+    ("001_initial_schema", MIGRATION_001_SQL),
+    ("002_candidate_practice_schema", MIGRATION_002_SQL),
+    ("003_hr_question_bank_and_repo_library", MIGRATION_003_SQL)
 ]
 
 def run_migrations(custom_path: Optional[str] = None):

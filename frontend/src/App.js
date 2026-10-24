@@ -14,6 +14,8 @@ import CodeHealth from './components/CodeHealth';
 import CinematicStory from './components/cinematic/CinematicStory';
 import AuthModal from './components/auth/AuthModal';
 import UserMenu from './components/auth/UserMenu';
+import CandidateDashboard from './components/practice/CandidateDashboard';
+import HrStudio from './components/hr/HrStudio';
 import { authService } from './services/auth';
 
 const repositoryLabel = (result, source) => {
@@ -200,103 +202,101 @@ function App() {
       {/* Main Content */}
       <main style={styles.main}>
         <div className="fade-in" key={activeTab + refreshKey}>
-          {/* Phase 1 Candidate Practice View */}
+          {/* Phase 2 Candidate Practice View */}
           {activeTab === 'practice' && (
-            <div style={styles.sectionCard}>
-              <div style={styles.cardHeader}>
-                <span style={{ fontSize: '24px' }}>🎯</span>
-                <div>
-                  <h2 style={styles.cardTitle}>Candidate Practice & Skill Intelligence</h2>
-                  <p style={styles.cardSubtitle}>
-                    Personal technical practice grounded in real codebases and verified skill evidence.
-                  </p>
+            currentUser ? (
+              <CandidateDashboard />
+            ) : (
+              <div style={styles.sectionCard}>
+                <div style={styles.cardHeader}>
+                  <span style={{ fontSize: '24px' }}>🎯</span>
+                  <div>
+                    <h2 style={styles.cardTitle}>Candidate Practice & Skill Intelligence</h2>
+                    <p style={styles.cardSubtitle}>
+                      Personal technical practice grounded in real codebases, resume parsing, and verified code evidence.
+                    </p>
+                  </div>
                 </div>
-              </div>
 
-              <div style={styles.gridTwo}>
-                <div style={styles.infoBox}>
-                  <h3 style={styles.boxTitle}>Role & Access Status</h3>
-                  <p style={styles.boxText}>
-                    {currentUser ? (
-                      <>
-                        Signed in as <strong>{currentUser.full_name}</strong> (<code>{currentUser.email}</code>).
-                        <br />
-                        Assigned Role: <span style={styles.tagGreen}>{currentUser.role}</span>
-                      </>
-                    ) : (
-                      'You are currently viewing as an unauthenticated visitor. Sign in as a Candidate to track learning history.'
-                    )}
-                  </p>
-                  {!currentUser && (
+                <div style={styles.gridTwo}>
+                  <div style={styles.infoBox}>
+                    <h3 style={styles.boxTitle}>Authentication Required</h3>
+                    <p style={styles.boxText}>
+                      Sign in or create a candidate account to upload your resume, connect repositories, generate personalized quizzes, and track your practice history.
+                    </p>
                     <button
                       onClick={() => setIsAuthModalOpen(true)}
                       style={styles.primaryBtn}
                     >
                       Sign In / Register as Candidate
                     </button>
-                  )}
+                  </div>
+
+                  <div style={styles.infoBox}>
+                    <h3 style={styles.boxTitle}>Server-Side Endpoint Authorization Test</h3>
+                    <p style={styles.boxText}>
+                      Verify candidate endpoint protection (<code>GET /api/auth/test/user-only</code>):
+                    </p>
+                    <button
+                      onClick={() => testEndpoint('user')}
+                      disabled={authTestLoading}
+                      style={styles.testBtn}
+                    >
+                      {authTestLoading ? 'Verifying with backend...' : 'Execute Candidate Endpoint Test'}
+                    </button>
+
+                    {authTestResult && (
+                      <div style={{
+                        ...styles.resultBox,
+                        borderColor: authTestResult.success ? 'var(--green)' : 'var(--red)'
+                      }}>
+                        {authTestResult.success ? (
+                          <div style={{ color: 'var(--green)' }}>
+                            <strong>✓ 200 OK — Authorized:</strong>
+                            <pre style={styles.codeBlock}>{JSON.stringify(authTestResult.data, null, 2)}</pre>
+                          </div>
+                        ) : (
+                          <div style={{ color: 'var(--red)' }}>
+                            <strong>✕ {authTestResult.status} — Rejected:</strong>
+                            <pre style={styles.codeBlock}>{authTestResult.error}</pre>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
-                <div style={styles.infoBox}>
-                  <h3 style={styles.boxTitle}>Server-Side Endpoint Authorization Test</h3>
-                  <p style={styles.boxText}>
-                    Verify candidate endpoint protection (<code>GET /api/auth/test/user-only</code>):
-                  </p>
-                  <button
-                    onClick={() => testEndpoint('user')}
-                    disabled={authTestLoading}
-                    style={styles.testBtn}
-                  >
-                    {authTestLoading ? 'Verifying with backend...' : 'Execute Candidate Endpoint Test'}
-                  </button>
-
-                  {authTestResult && (
-                    <div style={{
-                      ...styles.resultBox,
-                      borderColor: authTestResult.success ? 'var(--green)' : 'var(--red)'
-                    }}>
-                      {authTestResult.success ? (
-                        <div style={{ color: 'var(--green)' }}>
-                          <strong>✓ 200 OK — Authorized:</strong>
-                          <pre style={styles.codeBlock}>{JSON.stringify(authTestResult.data, null, 2)}</pre>
-                        </div>
-                      ) : (
-                        <div style={{ color: 'var(--red)' }}>
-                          <strong>✕ {authTestResult.status} — Rejected:</strong>
-                          <pre style={styles.codeBlock}>{authTestResult.error}</pre>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                <div style={styles.workflowRoadmap}>
+                  <h4 style={styles.roadmapTitle}>Phase 2 Practice Capabilities Live:</h4>
+                  <ul style={styles.roadmapList}>
+                    <li>✓ Resume upload & AI skill extraction (PDF, DOCX, TXT) with editable review</li>
+                    <li>✓ Secure GitHub repository connection & AST analysis status tracking</li>
+                    <li>✓ Grounded skill-to-code evidence mapping across AST symbols and architecture patterns</li>
+                    <li>✓ Interactive practice quizzes (Skill-based Mode A & Repository Mode B)</li>
+                    <li>✓ Objective scoring with multi-select partial credit & candidate question redaction</li>
+                    <li>✓ Persisted practice history and competency progress tracking</li>
+                  </ul>
                 </div>
               </div>
-
-              <div style={styles.workflowRoadmap}>
-                <h4 style={styles.roadmapTitle}>Phase 1 Foundation Live • Upcoming Phase 2 Features:</h4>
-                <ul style={styles.roadmapList}>
-                  <li>✓ Secure server-managed sessions (HttpOnly cookies + Bearer auth + CSRF)</li>
-                  <li>✓ Zero client-side role escalation (Candidate role strictly enforced)</li>
-                  <li>○ <em>Phase 2:</em> Resume parsing & verified skill-to-evidence Neo4j mapping</li>
-                  <li>○ <em>Phase 2:</em> AI question generation engine with deterministic AST checks</li>
-                </ul>
-              </div>
-            </div>
+            )
           )}
 
-          {/* Phase 1 HR Studio View */}
+          {/* Phase 3 HR Studio View */}
           {activeTab === 'hr-studio' && (
-            <div style={styles.sectionCard}>
-              <div style={styles.cardHeader}>
-                <span style={{ fontSize: '24px' }}>🏢</span>
-                <div>
-                  <h2 style={styles.cardTitle}>HR Recruiter & Assessment Studio</h2>
-                  <p style={styles.cardSubtitle}>
-                    Organization assessment repository management, question curation, and candidate evaluations.
-                  </p>
+            isHr ? (
+              <HrStudio currentUser={currentUser} />
+            ) : (
+              <div style={styles.sectionCard}>
+                <div style={styles.cardHeader}>
+                  <span style={{ fontSize: '24px' }}>🏢</span>
+                  <div>
+                    <h2 style={styles.cardTitle}>HR Recruiter & Assessment Studio</h2>
+                    <p style={styles.cardSubtitle}>
+                      Organization assessment repository management, question curation, and candidate evaluations.
+                    </p>
+                  </div>
                 </div>
-              </div>
 
-              {!isHr ? (
                 <div style={styles.restrictedNotice}>
                   <span style={{ fontSize: '28px', color: 'var(--amber)' }}>🔒</span>
                   <div style={{ flex: 1 }}>
@@ -316,65 +316,40 @@ function App() {
                     Test Server HR Guard (Expect 403)
                   </button>
                 </div>
-              ) : (
-                <div style={styles.gridTwo}>
-                  <div style={styles.infoBox}>
-                    <h3 style={styles.boxTitle}>Authorized Organization</h3>
-                    <p style={styles.boxText}>
-                      Signed in as <strong>{currentUser.full_name}</strong> (<code>{currentUser.email}</code>).
-                      <br />
-                      Assigned Role: <span style={styles.tagBlue}>{currentUser.role}</span>
-                      <br />
-                      Organization: <strong>{currentUser.organizations?.[0]?.org_name || 'Primary Corp'}</strong> (<code>{currentUser.organizations?.[0]?.org_role}</code>)
-                    </p>
+
+                {authTestResult && (
+                  <div style={{
+                    ...styles.resultBox,
+                    marginTop: '16px',
+                    borderColor: authTestResult.success ? 'var(--green)' : 'var(--red)'
+                  }}>
+                    {authTestResult.success ? (
+                      <div style={{ color: 'var(--green)' }}>
+                        <strong>✓ 200 OK — HR Access Verified:</strong>
+                        <pre style={styles.codeBlock}>{JSON.stringify(authTestResult.data, null, 2)}</pre>
+                      </div>
+                    ) : (
+                      <div style={{ color: 'var(--red)' }}>
+                        <strong>✕ {authTestResult.status} Forbidden — Access Correctly Blocked:</strong>
+                        <pre style={styles.codeBlock}>{authTestResult.error}</pre>
+                      </div>
+                    )}
                   </div>
+                )}
 
-                  <div style={styles.infoBox}>
-                    <h3 style={styles.boxTitle}>Server-Side HR Authorization Test</h3>
-                    <p style={styles.boxText}>
-                      Verify HR endpoint protection (<code>GET /api/auth/test/hr-only</code>):
-                    </p>
-                    <button
-                      onClick={() => testEndpoint('hr')}
-                      disabled={authTestLoading}
-                      style={styles.testBtn}
-                    >
-                      {authTestLoading ? 'Verifying with backend...' : 'Execute HR Endpoint Test'}
-                    </button>
-                  </div>
+                <div style={styles.workflowRoadmap}>
+                  <h4 style={styles.roadmapTitle}>Phase 3 HR Studio Live:</h4>
+                  <ul style={styles.roadmapList}>
+                    <li>✓ Organization-scoped HR Question Bank with multi-criteria search & filters</li>
+                    <li>✓ Manual question authoring & editing with automated option/answer validation</li>
+                    <li>✓ AI-assisted question generation (Skill-based Mode A & Repository Mode B)</li>
+                    <li>✓ Formal question lifecycle (Needs Review → Approved → Published → Archived)</li>
+                    <li>✓ Immutable question version tracking with candidate preview mode</li>
+                    <li>✓ Approved Repository Library with SSRF-protected registration & code coverage analytics</li>
+                  </ul>
                 </div>
-              )}
-
-              {authTestResult && (
-                <div style={{
-                  ...styles.resultBox,
-                  marginTop: '16px',
-                  borderColor: authTestResult.success ? 'var(--green)' : 'var(--red)'
-                }}>
-                  {authTestResult.success ? (
-                    <div style={{ color: 'var(--green)' }}>
-                      <strong>✓ 200 OK — HR Access Verified:</strong>
-                      <pre style={styles.codeBlock}>{JSON.stringify(authTestResult.data, null, 2)}</pre>
-                    </div>
-                  ) : (
-                    <div style={{ color: 'var(--red)' }}>
-                      <strong>✕ {authTestResult.status} Forbidden — Access Correctly Blocked:</strong>
-                      <pre style={styles.codeBlock}>{authTestResult.error}</pre>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div style={styles.workflowRoadmap}>
-                <h4 style={styles.roadmapTitle}>Phase 1 Foundation Live • Upcoming Phase 3 & 4 HR Features:</h4>
-                <ul style={styles.roadmapList}>
-                  <li>✓ Organization-level tenant isolation & unambiguous repository access grants</li>
-                  <li>✓ Single-use expiring invitation codes for recruiter provisioning</li>
-                  <li>○ <em>Phase 3:</em> Organization Question Bank & Question Lifecycle (Draft → Review → Approved)</li>
-                  <li>○ <em>Phase 4:</em> Timed split-pane Assessment Workspace with embedded Codebase Explorer</li>
-                </ul>
               </div>
-            </div>
+            )
           )}
 
           {/* Existing ARCHITECH Code Intelligence Features */}

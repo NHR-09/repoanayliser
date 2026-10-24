@@ -1,0 +1,232 @@
+import os
+import io
+import uuid
+import re
+import logging
+from pathlib import Path
+from typing import Optional, Dict, Any
+from datetime import datetime
+
+import pypdf
+import docx
+
+from src.db.connection import get_db_connection
+
+logger = logging.getLogger(__name__)
+
+# Base storage directory for resumes (outside static web root)
+RESUME_STORAGE_DIR = Path(os.getenv("RESUME_STORAGE_DIR", Path(__file__).resolve().parent.parent.parent / ".data" / "resumes"))
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB default
+
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".txt"}
+ALLOWED_MIME_TYPES = {
+    "application/pdf",
+    "application/x-pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/msword",
+    "text/plain"
+}
+
+class ResumeService:
+    def __init__(self, storage_dir: Optional[Path] = None):
+        self.storage_dir = storage_dir or RESUME_STORAGE_DIR
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
+
+    def validate_file(self, filename: str, file_bytes: bytes, mime_type: Optional[str] = None):
+        """Validate file size, extension, and binary signature."""
+        if not file_bytes:
+            raise ValueError("Uploaded file is empty.")
+
+        if len(file_bytes) > MAX_FILE_SIZE:
+            raise ValueError(f"File size ({len(file_bytes) / 1024 / 1024:.2f} MB) exceeds maximum allowed limit of 10 MB.")
+
+        # Validate extension
+        _, ext = os.path.splitext(filename.lower())
+        if ext not in ALLOWED_EXTENSIONS:
+            raise ValueError(f"Unsupported file format '{ext}'. Supported formats: PDF, DOCX, TXT.")
+
+        # Signature/magic byte checks
+        if ext == ".pdf":
+            if not file_bytes.startswith(b"%PDF-"):
+                raise ValueError("Invalid PDF format: missing valid PDF file header.")
+        elif ext == ".docx":
+            if not file_bytes.startswith(b"PK\x03\x04"):
+                raise ValueError("Invalid DOCX format: missing valid document archive signature.")
+
+    def extract_text(self, filename: str, file_bytes: bytes) -> str:
+        """Extract and normalize plain text from PDF, DOCX, or TXT."""
+        _, ext = os.path.splitext(filename.lower())
+        raw_text = ""
+
+        try:
+            if ext == ".pdf":
+                reader = pypdf.PdfReader(io.BytesIO(file_bytes))
+                pages_text = []
+                for i, page in enumerate(reader.pages):
+                    page_content = page.extract_text() or ""
+                    if page_content.strip():
+                        pages_text.append(page_content)
+                raw_text = "\n\n".join(pages_text)
+
+            elif ext == ".docx":
+                doc = docx.Document(io.BytesIO(file_bytes))
+                parts = []
+                for p in doc.paragraphs:
+                    if p.text.strip():
+                        parts.append(p.text)
+                for table in doc.tables:
+                    for row in table.rows:
+                        row_text = " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+                        if row_text:
+                            parts.append(row_text)
+                raw_text = "\n".join(parts)
+
+            elif ext == ".txt":
+                try:
+                    raw_text = file_bytes.decode("utf-8")
+                except UnicodeDecodeError:
+                    raw_text = file_bytes.decode("latin-1", errors="replace")
+
+        except Exception as e:
+            logger.error(f"Error parsing resume document {filename}: {e}")
+            raise ValueError(f"Unable to parse document: {str(e)}")
+
+        # Normalize text while preserving meaningful technology names and structure
+        normalized = self._normalize_text(raw_text)
+        if len(normalized.strip()) < 20:
+            raise ValueError(
+                "Could not extract readable text from resume. "
+                "If this is a scanned or image-based PDF, please provide a text-based PDF or DOCX file."
+            )
+        return normalized
+
+    def _normalize_text(self, text: str) -> str:
+        """Clean control chars while keeping newlines, indentation, and code symbols."""
+        if not text:
+            return ""
+        # Remove null bytes and non-printable control characters (except \n, \r, \t)
+        text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]", "", text)
+        # Standardize carriage returns
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        # Collapse excessive newlines (>3) to double newlines
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
+
+    def upload_resume(
+        self,
+        user_id: str,
+        filename: str,
+        file_bytes: bytes,
+        mime_type: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Validate, extract, save file to disk, and persist resume metadata in database."""
+        self.validate_file(filename, file_bytes, mime_type)
+        extracted_text = self.extract_text(filename, file_bytes)
+
+        # Generate internal storage identifier and safe storage path
+        storage_id = str(uuid.uuid4())
+        _, ext = os.path.splitext(filename.lower())
+        safe_ext = ext if ext in ALLOWED_EXTENSIONS else ".bin"
+
+        user_storage_dir = self.storage_dir / user_id
+        user_storage_dir.mkdir(parents=True, exist_ok=True)
+        file_path = user_storage_dir / f"{storage_id}{safe_ext}"
+
+        # Delete any existing resume file for this user before saving new one
+        existing = self.get_user_resume(user_id)
+        if existing and existing.get("file_path"):
+            old_path = Path(existing["file_path"])
+            if old_path.exists():
+                try:
+                    old_path.unlink()
+                except Exception as e:
+                    logger.warning(f"Failed to remove previous resume file {old_path}: {e}")
+
+        # Write file securely
+        with open(file_path, "wb") as f:
+            f.write(file_bytes)
+
+        # Database record
+        resume_record_id = str(uuid.uuid4())
+        now = datetime.utcnow().isoformat()
+        with get_db_connection() as conn:
+            # Check if user already has a resume record
+            if existing:
+                conn.execute("""
+                    UPDATE user_resumes
+                    SET filename = ?, file_path = ?, file_size = ?, mime_type = ?, raw_text = ?, updated_at = ?
+                    WHERE user_id = ?
+                """, (
+                    filename,
+                    str(file_path),
+                    len(file_bytes),
+                    mime_type or f"application/{safe_ext.lstrip('.')}",
+                    extracted_text,
+                    now,
+                    user_id
+                ))
+                resume_record_id = existing["id"]
+            else:
+                conn.execute("""
+                    INSERT INTO user_resumes (id, user_id, filename, file_path, file_size, mime_type, raw_text, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    resume_record_id,
+                    user_id,
+                    filename,
+                    str(file_path),
+                    len(file_bytes),
+                    mime_type or f"application/{safe_ext.lstrip('.')}",
+                    extracted_text,
+                    now,
+                    now
+                ))
+
+        preview = extracted_text[:300] + ("..." if len(extracted_text) > 300 else "")
+        return {
+            "id": resume_record_id,
+            "filename": filename,
+            "file_size": len(file_bytes),
+            "mime_type": mime_type or f"application/{safe_ext.lstrip('.')}",
+            "created_at": now,
+            "text_preview": preview,
+            "character_count": len(extracted_text)
+        }
+
+    def get_user_resume(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Retrieve user's active resume metadata and preview."""
+        with get_db_connection() as conn:
+            row = conn.execute("""
+                SELECT id, user_id, filename, file_path, file_size, mime_type, raw_text, created_at, updated_at
+                FROM user_resumes
+                WHERE user_id = ?
+            """, (user_id,)).fetchone()
+            if not row:
+                return None
+            data = dict(row)
+            data["text_preview"] = data["raw_text"][:300] + ("..." if len(data["raw_text"]) > 300 else "")
+            return data
+
+    def get_resume_raw_text(self, user_id: str) -> Optional[str]:
+        """Get full extracted text for skill analysis."""
+        with get_db_connection() as conn:
+            row = conn.execute("SELECT raw_text FROM user_resumes WHERE user_id = ?", (user_id,)).fetchone()
+            return row["raw_text"] if row else None
+
+    def delete_user_resume(self, user_id: str) -> bool:
+        """Delete resume record and remove file from disk."""
+        existing = self.get_user_resume(user_id)
+        if not existing:
+            return False
+
+        if existing.get("file_path"):
+            path = Path(existing["file_path"])
+            if path.exists():
+                try:
+                    path.unlink()
+                except Exception as e:
+                    logger.warning(f"Failed to delete resume file {path}: {e}")
+
+        with get_db_connection() as conn:
+            conn.execute("DELETE FROM user_resumes WHERE user_id = ?", (user_id,))
+            return True
