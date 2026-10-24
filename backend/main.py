@@ -12,15 +12,24 @@ from pydantic import BaseModel
 from typing import Dict, List
 import uuid
 from src.analysis_engine import AnalysisEngine
+from src.db.connection import init_db
+from src.api.auth import router as auth_router
 
 app = FastAPI(title="ARCHITECH API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:8000"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+def on_startup():
+    init_db()
+
+app.include_router(auth_router)
 
 engine = AnalysisEngine()
 jobs = {}

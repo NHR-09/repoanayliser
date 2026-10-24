@@ -12,6 +12,9 @@ import SnapshotComparison from './components/SnapshotComparison';
 import BlastRadius from './components/BlastRadius';
 import CodeHealth from './components/CodeHealth';
 import CinematicStory from './components/cinematic/CinematicStory';
+import AuthModal from './components/auth/AuthModal';
+import UserMenu from './components/auth/UserMenu';
+import { authService } from './services/auth';
 
 const repositoryLabel = (result, source) => {
   const explicit = result?.repo_name || result?.repository_name || result?.name;
@@ -28,6 +31,12 @@ function App() {
   const [displayText, setDisplayText] = useState('');
   const [currentRepoId, setCurrentRepoId] = useState('eac55829cf3ea1d6');
   const [currentRepoName, setCurrentRepoName] = useState('repoanayliser');
+
+  // Authentication & RBAC state
+  const [currentUser, setCurrentUser] = useState(null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [authTestResult, setAuthTestResult] = useState(null);
+  const [authTestLoading, setAuthTestLoading] = useState(false);
 
   const handleAnalysisComplete = (result, source) => {
     setRefreshKey(prev => prev + 1);
@@ -49,6 +58,46 @@ function App() {
       setCurrentRepoId(null);
       setCurrentRepoName(null);
       setRefreshKey(prev => prev + 1);
+    }
+  };
+
+  // Check authentication on initial load
+  useEffect(() => {
+    authService.getMe()
+      .then(user => setCurrentUser(user))
+      .catch(() => setCurrentUser(null));
+  }, []);
+
+  const handleAuthSuccess = (user) => {
+    setCurrentUser(user);
+    setAuthTestResult(null);
+  };
+
+  const handleLogout = async () => {
+    await authService.logout();
+    setCurrentUser(null);
+    setAuthTestResult(null);
+  };
+
+  const testEndpoint = async (type) => {
+    setAuthTestLoading(true);
+    setAuthTestResult(null);
+    try {
+      if (type === 'user') {
+        const res = await authService.testUserEndpoint();
+        setAuthTestResult({ success: true, data: res });
+      } else {
+        const res = await authService.testHrEndpoint();
+        setAuthTestResult({ success: true, data: res });
+      }
+    } catch (err) {
+      setAuthTestResult({
+        success: false,
+        status: err.response?.status,
+        error: err.response?.data?.detail || err.message
+      });
+    } finally {
+      setAuthTestLoading(false);
     }
   };
 
@@ -80,8 +129,12 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
+  const isHr = currentUser?.role === 'HR' || currentUser?.role === 'ADMIN';
+
   const tabs = [
     { id: 'story', label: 'Story Experience', icon: '▶' },
+    { id: 'practice', label: 'Candidate Practice', icon: '🎯' },
+    { id: 'hr-studio', label: 'HR Studio', icon: '🏢' },
     { id: 'architecture', label: 'Architecture', icon: '△' },
     { id: 'graph', label: 'File Graph', icon: '⬢' },
     { id: 'blast-radius', label: 'Blast Radius', icon: '◎' },
@@ -102,14 +155,22 @@ function App() {
         <div style={styles.headerInner}>
           <div style={styles.headerLeft}>
             <h1 style={styles.title}>{displayText}</h1>
-            <p style={styles.subtitle}>Architectural Recovery & Semantic Synthesis</p>
+            <p style={styles.subtitle}>Repository-Aware Assessment & Architectural Intelligence</p>
           </div>
-          {currentRepoName && (
-            <div style={styles.repoIndicator}>
-              <span style={styles.repoDot}></span>
-              {currentRepoName}
-            </div>
-          )}
+
+          <div style={styles.headerRight}>
+            {currentRepoName && (
+              <div style={styles.repoIndicator}>
+                <span style={styles.repoDot}></span>
+                {currentRepoName}
+              </div>
+            )}
+            <UserMenu
+              user={currentUser}
+              onOpenAuth={() => setIsAuthModalOpen(true)}
+              onLogout={handleLogout}
+            />
+          </div>
         </div>
       </header>
 
@@ -122,11 +183,15 @@ function App() {
               onClick={() => setActiveTab(tab.id)}
               style={{
                 ...styles.tab,
-                ...(activeTab === tab.id ? styles.activeTab : {})
+                ...(activeTab === tab.id ? styles.activeTab : {}),
+                ...(tab.id === 'hr-studio' && isHr ? styles.hrTabActive : {})
               }}
             >
               <span style={styles.tabIcon}>{tab.icon}</span>
               {tab.label}
+              {tab.id === 'hr-studio' && isHr && (
+                <span style={styles.badgePill}>HR</span>
+              )}
             </button>
           ))}
         </div>
@@ -135,6 +200,184 @@ function App() {
       {/* Main Content */}
       <main style={styles.main}>
         <div className="fade-in" key={activeTab + refreshKey}>
+          {/* Phase 1 Candidate Practice View */}
+          {activeTab === 'practice' && (
+            <div style={styles.sectionCard}>
+              <div style={styles.cardHeader}>
+                <span style={{ fontSize: '24px' }}>🎯</span>
+                <div>
+                  <h2 style={styles.cardTitle}>Candidate Practice & Skill Intelligence</h2>
+                  <p style={styles.cardSubtitle}>
+                    Personal technical practice grounded in real codebases and verified skill evidence.
+                  </p>
+                </div>
+              </div>
+
+              <div style={styles.gridTwo}>
+                <div style={styles.infoBox}>
+                  <h3 style={styles.boxTitle}>Role & Access Status</h3>
+                  <p style={styles.boxText}>
+                    {currentUser ? (
+                      <>
+                        Signed in as <strong>{currentUser.full_name}</strong> (<code>{currentUser.email}</code>).
+                        <br />
+                        Assigned Role: <span style={styles.tagGreen}>{currentUser.role}</span>
+                      </>
+                    ) : (
+                      'You are currently viewing as an unauthenticated visitor. Sign in as a Candidate to track learning history.'
+                    )}
+                  </p>
+                  {!currentUser && (
+                    <button
+                      onClick={() => setIsAuthModalOpen(true)}
+                      style={styles.primaryBtn}
+                    >
+                      Sign In / Register as Candidate
+                    </button>
+                  )}
+                </div>
+
+                <div style={styles.infoBox}>
+                  <h3 style={styles.boxTitle}>Server-Side Endpoint Authorization Test</h3>
+                  <p style={styles.boxText}>
+                    Verify candidate endpoint protection (<code>GET /api/auth/test/user-only</code>):
+                  </p>
+                  <button
+                    onClick={() => testEndpoint('user')}
+                    disabled={authTestLoading}
+                    style={styles.testBtn}
+                  >
+                    {authTestLoading ? 'Verifying with backend...' : 'Execute Candidate Endpoint Test'}
+                  </button>
+
+                  {authTestResult && (
+                    <div style={{
+                      ...styles.resultBox,
+                      borderColor: authTestResult.success ? 'var(--green)' : 'var(--red)'
+                    }}>
+                      {authTestResult.success ? (
+                        <div style={{ color: 'var(--green)' }}>
+                          <strong>✓ 200 OK — Authorized:</strong>
+                          <pre style={styles.codeBlock}>{JSON.stringify(authTestResult.data, null, 2)}</pre>
+                        </div>
+                      ) : (
+                        <div style={{ color: 'var(--red)' }}>
+                          <strong>✕ {authTestResult.status} — Rejected:</strong>
+                          <pre style={styles.codeBlock}>{authTestResult.error}</pre>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div style={styles.workflowRoadmap}>
+                <h4 style={styles.roadmapTitle}>Phase 1 Foundation Live • Upcoming Phase 2 Features:</h4>
+                <ul style={styles.roadmapList}>
+                  <li>✓ Secure server-managed sessions (HttpOnly cookies + Bearer auth + CSRF)</li>
+                  <li>✓ Zero client-side role escalation (Candidate role strictly enforced)</li>
+                  <li>○ <em>Phase 2:</em> Resume parsing & verified skill-to-evidence Neo4j mapping</li>
+                  <li>○ <em>Phase 2:</em> AI question generation engine with deterministic AST checks</li>
+                </ul>
+              </div>
+            </div>
+          )}
+
+          {/* Phase 1 HR Studio View */}
+          {activeTab === 'hr-studio' && (
+            <div style={styles.sectionCard}>
+              <div style={styles.cardHeader}>
+                <span style={{ fontSize: '24px' }}>🏢</span>
+                <div>
+                  <h2 style={styles.cardTitle}>HR Recruiter & Assessment Studio</h2>
+                  <p style={styles.cardSubtitle}>
+                    Organization assessment repository management, question curation, and candidate evaluations.
+                  </p>
+                </div>
+              </div>
+
+              {!isHr ? (
+                <div style={styles.restrictedNotice}>
+                  <span style={{ fontSize: '28px', color: 'var(--amber)' }}>🔒</span>
+                  <div style={{ flex: 1 }}>
+                    <h3 style={{ margin: '0 0 6px 0', fontSize: '15px', color: 'var(--amber)' }}>
+                      HR Recruiter Access Required
+                    </h3>
+                    <p style={{ margin: 0, fontSize: '13px', color: 'var(--text-secondary)' }}>
+                      This administrative module is strictly restricted to verified corporate recruiters and organization owners.
+                      Candidate accounts cannot switch to the HR role without an authorized single-use invitation.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => testEndpoint('hr')}
+                    disabled={authTestLoading}
+                    style={styles.testBtn}
+                  >
+                    Test Server HR Guard (Expect 403)
+                  </button>
+                </div>
+              ) : (
+                <div style={styles.gridTwo}>
+                  <div style={styles.infoBox}>
+                    <h3 style={styles.boxTitle}>Authorized Organization</h3>
+                    <p style={styles.boxText}>
+                      Signed in as <strong>{currentUser.full_name}</strong> (<code>{currentUser.email}</code>).
+                      <br />
+                      Assigned Role: <span style={styles.tagBlue}>{currentUser.role}</span>
+                      <br />
+                      Organization: <strong>{currentUser.organizations?.[0]?.org_name || 'Primary Corp'}</strong> (<code>{currentUser.organizations?.[0]?.org_role}</code>)
+                    </p>
+                  </div>
+
+                  <div style={styles.infoBox}>
+                    <h3 style={styles.boxTitle}>Server-Side HR Authorization Test</h3>
+                    <p style={styles.boxText}>
+                      Verify HR endpoint protection (<code>GET /api/auth/test/hr-only</code>):
+                    </p>
+                    <button
+                      onClick={() => testEndpoint('hr')}
+                      disabled={authTestLoading}
+                      style={styles.testBtn}
+                    >
+                      {authTestLoading ? 'Verifying with backend...' : 'Execute HR Endpoint Test'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {authTestResult && (
+                <div style={{
+                  ...styles.resultBox,
+                  marginTop: '16px',
+                  borderColor: authTestResult.success ? 'var(--green)' : 'var(--red)'
+                }}>
+                  {authTestResult.success ? (
+                    <div style={{ color: 'var(--green)' }}>
+                      <strong>✓ 200 OK — HR Access Verified:</strong>
+                      <pre style={styles.codeBlock}>{JSON.stringify(authTestResult.data, null, 2)}</pre>
+                    </div>
+                  ) : (
+                    <div style={{ color: 'var(--red)' }}>
+                      <strong>✕ {authTestResult.status} Forbidden — Access Correctly Blocked:</strong>
+                      <pre style={styles.codeBlock}>{authTestResult.error}</pre>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div style={styles.workflowRoadmap}>
+                <h4 style={styles.roadmapTitle}>Phase 1 Foundation Live • Upcoming Phase 3 & 4 HR Features:</h4>
+                <ul style={styles.roadmapList}>
+                  <li>✓ Organization-level tenant isolation & unambiguous repository access grants</li>
+                  <li>✓ Single-use expiring invitation codes for recruiter provisioning</li>
+                  <li>○ <em>Phase 3:</em> Organization Question Bank & Question Lifecycle (Draft → Review → Approved)</li>
+                  <li>○ <em>Phase 4:</em> Timed split-pane Assessment Workspace with embedded Codebase Explorer</li>
+                </ul>
+              </div>
+            </div>
+          )}
+
+          {/* Existing ARCHITECH Code Intelligence Features */}
           {activeTab === 'story' && (
             <CinematicStory
               repoId={currentRepoId || 'eac55829cf3ea1d6'}
@@ -168,7 +411,12 @@ function App() {
         </div>
       </main>
 
-
+      {/* Auth Modal */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        onAuthSuccess={handleAuthSuccess}
+      />
     </div>
   );
 }
@@ -191,33 +439,38 @@ const styles = {
   headerInner: {
     maxWidth: '1400px',
     margin: '0 auto',
-    padding: '20px 32px',
+    padding: '16px 32px',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
   headerLeft: {},
+  headerRight: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '12px',
+  },
   title: {
     margin: 0,
-    fontSize: '28px',
+    fontSize: '26px',
     fontFamily: 'var(--font-mono)',
     fontWeight: 600,
-    letterSpacing: '4px',
+    letterSpacing: '3px',
     color: 'var(--text-primary)',
   },
   subtitle: {
-    margin: '4px 0 0',
-    fontSize: '13px',
+    margin: '3px 0 0',
+    fontSize: '12px',
     color: 'var(--text-muted)',
     fontWeight: 400,
     letterSpacing: '0.5px',
   },
   repoIndicator: {
-    padding: '6px 14px',
+    padding: '6px 12px',
     background: 'var(--accent-glow)',
     border: '1px solid var(--border)',
     borderRadius: '20px',
-    fontSize: '13px',
+    fontSize: '12px',
     color: 'var(--text-secondary)',
     display: 'flex',
     alignItems: 'center',
@@ -236,7 +489,7 @@ const styles = {
     background: 'rgba(9, 9, 11, 0.6)',
     backdropFilter: 'blur(8px)',
     position: 'sticky',
-    top: '72px',
+    top: '68px',
     zIndex: 40,
   },
   navInner: {
@@ -244,15 +497,15 @@ const styles = {
     margin: '0 auto',
     padding: '8px 24px',
     display: 'flex',
-    gap: '2px',
+    gap: '3px',
     overflowX: 'auto',
   },
   tab: {
-    padding: '8px 14px',
+    padding: '8px 12px',
     border: 'none',
     background: 'transparent',
     cursor: 'pointer',
-    fontSize: '13px',
+    fontSize: '12px',
     fontWeight: 500,
     color: 'var(--text-muted)',
     borderRadius: 'var(--radius-sm)',
@@ -267,6 +520,17 @@ const styles = {
     color: 'var(--text-primary)',
     boxShadow: '0 0 0 1px var(--border)',
   },
+  hrTabActive: {
+    borderLeft: '2px solid var(--blue)',
+  },
+  badgePill: {
+    fontSize: '9px',
+    background: 'var(--blue-dim)',
+    color: 'var(--blue)',
+    padding: '1px 5px',
+    borderRadius: '6px',
+    fontWeight: 600,
+  },
   tabIcon: {
     fontSize: '11px',
     opacity: 0.7,
@@ -276,29 +540,143 @@ const styles = {
     margin: '24px auto',
     padding: '0 32px',
   },
+  sectionCard: {
+    background: 'var(--bg-card)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-lg)',
+    padding: '28px',
+    boxShadow: 'var(--shadow-card)',
+  },
+  cardHeader: {
+    display: 'flex',
+    gap: '16px',
+    alignItems: 'center',
+    marginBottom: '24px',
+    paddingBottom: '16px',
+    borderBottom: '1px solid var(--border)',
+  },
+  cardTitle: {
+    margin: 0,
+    fontSize: '18px',
+    fontWeight: 600,
+    color: 'var(--text-primary)',
+  },
+  cardSubtitle: {
+    margin: '4px 0 0',
+    fontSize: '13px',
+    color: 'var(--text-muted)',
+  },
+  gridTwo: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+    gap: '20px',
+  },
+  infoBox: {
+    background: 'var(--bg-elevated)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-md)',
+    padding: '20px',
+  },
+  boxTitle: {
+    margin: '0 0 10px 0',
+    fontSize: '14px',
+    fontWeight: 600,
+    color: 'var(--text-primary)',
+  },
+  boxText: {
+    margin: 0,
+    fontSize: '13px',
+    color: 'var(--text-secondary)',
+    lineHeight: '1.5',
+  },
+  tagGreen: {
+    background: 'var(--green-dim)',
+    color: 'var(--green)',
+    padding: '2px 8px',
+    borderRadius: '12px',
+    fontSize: '11px',
+    fontWeight: 600,
+  },
+  tagBlue: {
+    background: 'var(--blue-dim)',
+    color: 'var(--blue)',
+    padding: '2px 8px',
+    borderRadius: '12px',
+    fontSize: '11px',
+    fontWeight: 600,
+  },
+  primaryBtn: {
+    marginTop: '14px',
+    padding: '8px 16px',
+    background: 'var(--text-primary)',
+    color: 'var(--bg-primary)',
+    fontWeight: 600,
+    fontSize: '12px',
+    borderRadius: 'var(--radius-sm)',
+    border: 'none',
+    cursor: 'pointer',
+  },
+  testBtn: {
+    marginTop: '12px',
+    padding: '8px 16px',
+    background: 'var(--bg-card)',
+    color: 'var(--text-primary)',
+    fontWeight: 500,
+    fontSize: '12px',
+    borderRadius: 'var(--radius-sm)',
+    border: '1px solid var(--border)',
+    cursor: 'pointer',
+  },
+  resultBox: {
+    marginTop: '12px',
+    padding: '12px',
+    background: 'var(--bg-input)',
+    border: '1px solid var(--border)',
+    borderRadius: 'var(--radius-sm)',
+    fontSize: '12px',
+  },
+  codeBlock: {
+    margin: '6px 0 0',
+    padding: '8px',
+    background: 'rgba(0,0,0,0.4)',
+    borderRadius: '4px',
+    fontFamily: 'var(--font-mono)',
+    fontSize: '11px',
+    overflowX: 'auto',
+  },
+  restrictedNotice: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '16px',
+    padding: '20px',
+    background: 'var(--amber-dim)',
+    border: '1px solid rgba(251, 191, 36, 0.3)',
+    borderRadius: 'var(--radius-md)',
+  },
+  workflowRoadmap: {
+    marginTop: '24px',
+    paddingTop: '16px',
+    borderTop: '1px solid var(--border)',
+  },
+  roadmapTitle: {
+    margin: '0 0 8px 0',
+    fontSize: '12px',
+    color: 'var(--text-muted)',
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+  },
+  roadmapList: {
+    margin: 0,
+    paddingLeft: '16px',
+    fontSize: '12px',
+    color: 'var(--text-dim)',
+    lineHeight: '1.6',
+  },
   emptyState: {
     textAlign: 'center',
     padding: '60px 20px',
     color: 'var(--text-muted)',
     fontSize: '14px',
-  },
-  footer: {
-    textAlign: 'center',
-    padding: '20px',
-    color: 'var(--text-dim)',
-    fontSize: '12px',
-    borderTop: '1px solid var(--border)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: '6px',
-  },
-  footerDot: {
-    width: '5px',
-    height: '5px',
-    borderRadius: '50%',
-    background: 'var(--green)',
-    display: 'inline-block',
   },
 };
 

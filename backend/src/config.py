@@ -11,6 +11,10 @@ class Settings(BaseSettings):
     max_file_size: int = 1000000
     supported_languages: list = ["python", "javascript", "typescript", "tsx", "java"]
     
+    db_path: str = "./.data/architech.db"
+    session_expire_hours: int = 24
+    hr_bootstrap_key: str = "architech_hr_bootstrap_key_2026"
+    
     class Config:
         env_file = ".env"
         case_sensitive = False
