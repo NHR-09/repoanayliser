@@ -298,7 +298,10 @@ class AssessmentAttemptService:
                 except Exception:
                     cand_resp = ans_record["candidate_response"]
 
-            # Parse answer key
+            # Parse answer key safely across formats:
+            # Format 1: dict {"correct_option": "A"} or {"correct_options": ["A", "B"]} or {"correct_value": "True"}
+            # Format 2: list ["A"] or ["A", "B"] or ["True"]
+            # Format 3: scalar string/number
             ak = q.get("answer_key", {})
             if isinstance(ak, str):
                 try:
@@ -311,10 +314,16 @@ class AssessmentAttemptService:
             feedback = ""
 
             if fmt in ("SINGLE_SELECT", "TRUE_FALSE"):
-                correct_key = ak.get("correct_option") or ak.get("correct_value")
+                if isinstance(ak, dict):
+                    correct_key = ak.get("correct_option") or ak.get("correct_value")
+                elif isinstance(ak, list) and ak:
+                    correct_key = ak[0]
+                else:
+                    correct_key = ak
+
                 # Normalize candidate selection (can be string "A" or list ["A"])
                 selected_val = cand_resp[0] if isinstance(cand_resp, list) and cand_resp else cand_resp
-                if selected_val and str(selected_val).strip().upper() == str(correct_key).strip().upper():
+                if selected_val is not None and correct_key is not None and str(selected_val).strip().upper() == str(correct_key).strip().upper():
                     awarded = max_points
                     is_correct = 1
                     feedback = "Correct"
@@ -322,7 +331,13 @@ class AssessmentAttemptService:
                     feedback = "Incorrect"
 
             elif fmt == "MULTI_SELECT":
-                correct_keys = [str(k).upper() for k in ak.get("correct_options", [])]
+                if isinstance(ak, dict):
+                    correct_keys = [str(k).upper() for k in ak.get("correct_options", [])]
+                elif isinstance(ak, list):
+                    correct_keys = [str(k).upper() for k in ak]
+                else:
+                    correct_keys = [str(ak).upper()] if ak else []
+
                 selected_keys = [str(k).upper() for k in (cand_resp if isinstance(cand_resp, list) else [cand_resp])] if cand_resp else []
 
                 if correct_keys:

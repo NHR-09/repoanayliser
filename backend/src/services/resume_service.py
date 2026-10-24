@@ -125,8 +125,11 @@ class ResumeService:
 
         # Generate internal storage identifier and safe storage path
         storage_id = str(uuid.uuid4())
-        _, ext = os.path.splitext(filename.lower())
+        clean_filename = Path(filename.replace('\\', '/')).name
+        _, ext = os.path.splitext(clean_filename.lower())
         safe_ext = ext if ext in ALLOWED_EXTENSIONS else ".bin"
+        if not clean_filename:
+            clean_filename = f"resume{safe_ext}"
 
         user_storage_dir = self.storage_dir / user_id
         user_storage_dir.mkdir(parents=True, exist_ok=True)
@@ -157,7 +160,7 @@ class ResumeService:
                     SET filename = ?, file_path = ?, file_size = ?, mime_type = ?, raw_text = ?, updated_at = ?
                     WHERE user_id = ?
                 """, (
-                    filename,
+                    clean_filename,
                     str(file_path),
                     len(file_bytes),
                     mime_type or f"application/{safe_ext.lstrip('.')}",
@@ -173,7 +176,7 @@ class ResumeService:
                 """, (
                     resume_record_id,
                     user_id,
-                    filename,
+                    clean_filename,
                     str(file_path),
                     len(file_bytes),
                     mime_type or f"application/{safe_ext.lstrip('.')}",
@@ -185,7 +188,7 @@ class ResumeService:
         preview = extracted_text[:300] + ("..." if len(extracted_text) > 300 else "")
         return {
             "id": resume_record_id,
-            "filename": filename,
+            "filename": clean_filename,
             "file_size": len(file_bytes),
             "mime_type": mime_type or f"application/{safe_ext.lstrip('.')}",
             "created_at": now,

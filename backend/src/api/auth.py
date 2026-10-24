@@ -245,6 +245,12 @@ async def register_hr(req: HrRegisterRequest, request: Request, response: Respon
                 detail="HR invitation code has already been used"
             )
             
+        if invite["email"] and invite["email"].strip().lower() != email_clean:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="HR invitation code was issued to a different email address"
+            )
+
         expires_at = datetime.fromisoformat(invite["expires_at"])
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
