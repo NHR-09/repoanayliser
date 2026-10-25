@@ -18,7 +18,7 @@ from .retrieval.graphify_retriever import GraphifyRetriever
 from .retrieval.retrieval_engine import RetrievalEngine
 from .retrieval.graph_rag import GraphRAGEngine
 from .reasoning.llm_reasoner import LLMReasoner
-from .reasoning.query_guard import ProjectQueryGuard
+from .reasoning.query_guard import ProjectQueryGuard, LaraDecisionGuard
 from .analysis.workflow_extractor import WorkflowExtractor
 from .config import settings
 
@@ -57,7 +57,7 @@ class AnalysisEngine:
         self.graph_rag = GraphRAGEngine(graph_db=self.graph_db)
         self.retrieval_engine = RetrievalEngine(self.graphify, self.graph_db, self.graph_rag)
         self.llm = LLMReasoner()
-        self.project_query_guard = ProjectQueryGuard()
+        self.project_query_guard = LaraDecisionGuard()
         self.version_tracker = VersionTracker(self.graph_db)
         self.workflow_extractor = WorkflowExtractor(self.graph_db, self.dependency_mapper)
         self.pattern_detector = None
@@ -1827,7 +1827,7 @@ class AnalysisEngine:
         repo_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Answer an in-scope developer question using retrieved repository evidence."""
-        decision = self.project_query_guard.evaluate(query)
+        decision = self.project_query_guard.evaluate(query, include_metadata=True)
         if not decision["allowed"]:
             return {
                 "answer": "I can help with questions about this project's code, structure, and architecture. Please ask a project-related question.",
