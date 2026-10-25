@@ -15,6 +15,15 @@ DATA_ROOT = MCP_ROOT / ".data"
 load_dotenv(BACKEND_ROOT / ".env", override=False)
 
 
+def _default_backend_python() -> Path:
+    py_rel = "Scripts/python.exe" if os.name == "nt" else "bin/python"
+    for cand in ("venv", ".venv"):
+        p = BACKEND_ROOT / cand / py_rel
+        if p.exists():
+            return p
+    return BACKEND_ROOT / "venv" / py_rel
+
+
 @dataclass(frozen=True)
 class Config:
     neo4j_uri: str = os.getenv("NEO4J_URI", "neo4j://127.0.0.1:7687")
@@ -24,7 +33,7 @@ class Config:
     state_db: Path = Path(os.getenv("ARCHITECH_MCP_STATE_DB", DATA_ROOT / "state.sqlite3"))
     backend_python: Path = Path(os.getenv(
         "ARCHITECH_BACKEND_PYTHON",
-        BACKEND_ROOT / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python"),
+        str(_default_backend_python()),
     ))
     max_page_size: int = 100
     default_page_size: int = 20

@@ -1,0 +1,634 @@
+/* ==============================================================================
+   ARCHITECH — Unconventional Repository Manager Styles
+   Architectural dossier, asymmetric telemetry, and rainbow micro-interactions
+   ============================================================================== */
+
+.repo-manager-container {
+  padding: 8px 0 40px;
+  max-width: 1300px;
+  margin: 0 auto;
+}
+
+/* --- Hero Telemetry Header --- */
+.repo-hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 24px;
+  margin-bottom: 28px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+  position: relative;
+}
+
+.repo-hero-main {
+  flex: 1;
+}
+
+.repo-hero-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+
+.repo-hero-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 8px #10b981;
+  animation: pulseBeacon 2.5s infinite;
+}
+
+@keyframes pulseBeacon {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.85); }
+}
+
+.repo-hero-title {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
+  margin: 0 0 6px 0;
+}
+
+.repo-hero-subtitle {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin: 0;
+  max-width: 640px;
+  line-height: 1.5;
+}
+
+/* Asymmetric telemetry stats bar */
+.repo-hero-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.repo-telemetry-chip {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  min-width: 90px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+  transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.repo-telemetry-chip:hover {
+  transform: translateY(-2px);
+  border-color: var(--border-hover);
+}
+
+.repo-telemetry-val {
+  font-family: var(--font-mono);
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+.repo-telemetry-lbl {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+  margin-top: 2px;
+}
+
+.repo-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 16px;
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  height: 42px;
+}
+
+.repo-refresh-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border-color: var(--border-hover);
+}
+
+.repo-refresh-btn:active svg {
+  transform: rotate(180deg);
+  transition: transform 0.3s ease;
+}
+
+/* --- Unconventional Grid Layout --- */
+.repo-unconventional-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+  gap: 20px;
+  align-items: stretch;
+}
+
+@media (max-width: 768px) {
+  .repo-unconventional-grid {
+    grid-template-columns: 1fr;
+  }
+  .repo-hero {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .repo-hero-stats {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+}
+
+/* --- Architectural Dossier Card --- */
+.repo-dossier-card {
+  position: relative;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 22px 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  cursor: pointer;
+  overflow: hidden;
+  transition: transform 0.25s cubic-bezier(0.2, 0, 0, 1),
+              box-shadow 0.25s cubic-bezier(0.2, 0, 0, 1),
+              border-color 0.25s ease;
+  min-height: 200px;
+}
+
+/* Subtle architectural top accent beam */
+.repo-dossier-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, rgba(56, 189, 248, 0.4), rgba(168, 85, 247, 0.4), transparent 80%);
+  opacity: 0.6;
+  transition: opacity 0.25s ease, height 0.25s ease;
+}
+
+/* Monospace index watermark */
+.repo-dossier-watermark {
+  position: absolute;
+  top: 14px;
+  right: 18px;
+  font-family: var(--font-mono);
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--text-dim);
+  opacity: 0.18;
+  letter-spacing: -0.05em;
+  pointer-events: none;
+  user-select: none;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+/* Card Hover States */
+.repo-dossier-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--border-hover);
+  box-shadow: 0 16px 36px -12px rgba(0, 0, 0, 0.12), 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.repo-dossier-card:hover::before {
+  opacity: 1;
+  height: 3px;
+  background: linear-gradient(90deg, #ff007f, #7928ca, #0070f3, #00dfd8, #10b981);
+}
+
+.repo-dossier-card:hover .repo-dossier-watermark {
+  opacity: 0.4;
+  transform: translateX(-4px);
+  color: var(--text-muted);
+}
+
+/* Dossier Top Bar */
+.repo-dossier-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  padding-right: 50px; /* space for watermark */
+}
+
+.repo-source-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: var(--bg-elevated);
+  padding: 3px 9px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  letter-spacing: 0.02em;
+}
+
+.repo-hash-badge {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  background: transparent;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px dashed var(--border);
+}
+
+/* Repository Main Name & Rainbow Underline */
+.repo-dossier-name-row {
+  margin-bottom: 8px;
+}
+
+.repo-dossier-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: inline-block;
+  position: relative;
+  letter-spacing: -0.01em;
+  transition: color 0.2s ease, font-weight 0.2s ease;
+}
+
+/* Rainbow Underline ONLY on Hover */
+.repo-dossier-title::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -4px;
+  width: 100%;
+  height: 2.5px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #ff007f, #7928ca, #0070f3, #00dfd8, #10b981, #facc15, #f97316, #ff007f);
+  background-size: 200% auto;
+  opacity: 0;
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease;
+  pointer-events: none;
+}
+
+.repo-dossier-card:hover .repo-dossier-title {
+  font-weight: 700;
+}
+
+.repo-dossier-card:hover .repo-dossier-title::after {
+  opacity: 1;
+  transform: scaleX(1);
+  animation: rainbowUnderlineShift 2s linear infinite;
+}
+
+/* Truncated File/URL Monospace Chip */
+.repo-dossier-path {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-dim);
+  margin-bottom: 18px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* Dossier Telemetry Metrics Row */
+.repo-dossier-metrics {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.repo-metric-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.repo-metric-badge strong {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Dossier Footer Row: Timestamp & Interactive Cue */
+.repo-dossier-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 14px;
+  border-top: 1px dashed var(--border);
+  gap: 12px;
+}
+
+.repo-timestamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.repo-action-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.repo-inspect-cue {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-muted);
+  transition: all 0.2s ease;
+}
+
+.repo-dossier-card:hover .repo-inspect-cue {
+  color: var(--blue, #38bdf8);
+  transform: translateX(3px);
+}
+
+/* Minimalist Trash Button */
+.repo-trash-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+}
+
+.repo-trash-btn:hover {
+  background: var(--red-dim);
+  color: var(--red);
+  border-color: rgba(248, 113, 113, 0.2);
+}
+
+.repo-delete-confirm-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--bg-elevated);
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
+.repo-confirm-btn {
+  padding: 3px 8px;
+  background: var(--red);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.repo-cancel-btn {
+  padding: 3px 6px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+/* --- Repository Detail View (Unconventional Architectural Layout) --- */
+.repo-detail-container {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.repo-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  width: fit-content;
+}
+
+.repo-back-btn:hover {
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  border-color: var(--border-hover);
+  transform: translateX(-3px);
+}
+
+.repo-detail-dossier {
+  position: relative;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px 28px;
+  overflow: hidden;
+}
+
+.repo-detail-dossier::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #38bdf8, #a855f7, #10b981);
+}
+
+.repo-detail-top-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+.repo-detail-meta {
+  flex: 1;
+  min-width: 280px;
+}
+
+.repo-detail-pills {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.repo-detail-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-primary);
+  margin: 0 0 6px 0;
+  letter-spacing: -0.02em;
+}
+
+.repo-detail-url {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-muted);
+  word-break: break-all;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.repo-import-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 20px;
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+}
+
+.repo-import-action-btn:hover:not(:disabled) {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+.repo-import-action-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.repo-stats-trio {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px dashed var(--border);
+}
+
+.repo-stat-card {
+  padding: 12px 16px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  display: flex;
+  flex-direction: column;
+}
+
+.repo-stat-card-val {
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.repo-stat-card-lbl {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+  margin-top: 2px;
+}
+
+/* Detail Sub-navigation Tabs */
+.repo-subnav-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+  overflow-x: auto;
+}
+
+.repo-subnav-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 16px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  position: relative;
+}
+
+.repo-subnav-tab:hover {
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+}
+
+.repo-subnav-tab.active {
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border-color: var(--border);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.03);
+}
+
+.repo-subnav-tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: -5px;
+  left: 20%;
+  right: 20%;
+  height: 2px;
+  background: var(--text-primary);
+  border-radius: 2px;
+}
+

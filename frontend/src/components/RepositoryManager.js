@@ -3,7 +3,47 @@ import { api } from '../services/api';
 import { formatFilePath } from '../utils/formatters';
 import FileVersionHistory from './FileVersionHistory';
 import SnapshotComparison from './SnapshotComparison';
-import { IconCamera, IconScroll, IconUsers, IconUser, IconX } from './Icons';
+import {
+  IconCamera,
+  IconScroll,
+  IconUsers,
+  IconUser,
+  IconX,
+  IconGlobe,
+  IconFolder,
+  IconFileText,
+  IconHistory,
+  IconArrowRight,
+  IconArrowLeft,
+  IconTrash,
+  IconDatabase,
+  IconRefresh,
+  IconGitCommit
+} from './Icons';
+import './RepositoryManager.css';
+
+const parseRepoInfo = (repo) => {
+  const rawName = repo.name || repo.repo_id || 'Repository';
+  const rawUrl = repo.url || '';
+  const isRemote = rawUrl.startsWith('http://') || rawUrl.startsWith('https://') || rawUrl.includes('github.com');
+
+  let displayName = rawName;
+  let displayPath = rawUrl || rawName;
+
+  if (rawName.includes('\\') || rawName.includes('/')) {
+    const parts = rawName.replace(/\\/g, '/').split('/').filter(Boolean);
+    displayName = parts[parts.length - 1] || rawName;
+  }
+
+  if (displayPath.includes('\\') || displayPath.includes('/')) {
+    const parts = displayPath.replace(/\\/g, '/').split('/').filter(Boolean);
+    if (parts.length > 3) {
+      displayPath = '.../' + parts.slice(-3).join('/');
+    }
+  }
+
+  return { displayName, displayPath, isRemote };
+};
 
 function RepositoryManager(props) {
   const [repositories, setRepositories] = useState([]);
@@ -106,96 +146,184 @@ function RepositoryManager(props) {
     return <div style={styles.loading}>Loading repositories...</div>;
   }
 
-  return (
-    <div style={styles.container}>
-      <div style={styles.header}>
-        <h2>Repository Version Tracking</h2>
-        <button onClick={loadRepositories} style={styles.refreshBtn}>
-          Refresh
-        </button>
-      </div>
+  const totalFiles = repositories.reduce((sum, r) => sum + (r.file_count || 0), 0);
+  const totalSnapshots = repositories.reduce((sum, r) => sum + (r.version_count || 0), 0);
 
+  return (
+    <div className="repo-manager-container">
       {activeView === 'list' && (
-        <div style={styles.repoList}>
-          {repositories.length === 0 ? (
-            <div style={styles.empty}>
-              No repositories analyzed yet. Go to Analyze tab to start.
-            </div>
-          ) : (
-            repositories.map(repo => (
-              <div key={repo.repo_id} style={styles.repoCard}>
-                <div onClick={() => selectRepository(repo)} style={{ cursor: 'pointer', flex: 1 }}>
-                  <div style={styles.repoHeader}>
-                    <h3 style={styles.repoName}>{repo.name}</h3>
-                    <span style={styles.repoId}>{repo.repo_id.substring(0, 8)}...</span>
-                  </div>
-                  <div style={styles.repoStats}>
-                    <div style={styles.stat}>
-                      <span style={styles.statLabel}>Files:</span>
-                      <span style={styles.statValue}>{repo.file_count}</span>
-                    </div>
-                    <div style={styles.stat}>
-                      <span style={styles.statLabel}>Snapshots:</span>
-                      <span style={styles.statValue}>{repo.version_count}</span>
-                    </div>
-                  </div>
-                  <div style={styles.repoMeta}>
-                    <span>{repo.url}</span>
-                    <span>{new Date(repo.last_analyzed).toLocaleString()}</span>
-                  </div>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  {confirmDeleteId === repo.repo_id ? (
-                    <>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); deleteRepo(repo.repo_id); }}
-                        disabled={deleting === repo.repo_id}
-                        style={styles.deleteConfirmBtn}
-                      >
-                        {deleting === repo.repo_id ? '...' : 'Confirm?'}
-                      </button>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(null); }}
-                        style={styles.deleteCancelBtn}
-                        title="Cancel"
-                      >
-                        <IconX size={12} />
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(repo.repo_id); }}
-                      disabled={deleting === repo.repo_id}
-                      style={styles.deleteBtn}
-                    >
-                      Del
-                    </button>
-                  )}
-                </div>
+        <>
+          <div className="repo-hero">
+            <div className="repo-hero-main">
+              <div className="repo-hero-badge">
+                <span className="repo-hero-badge-dot" />
+                <IconDatabase size={12} />
+                <span>ACTIVE TOPOLOGY REGISTRY</span>
               </div>
-            ))
-          )}
-        </div>
+              <h2 className="repo-hero-title">Repository Version Tracking</h2>
+              <p className="repo-hero-subtitle">
+                Indexed codebases, historical commit streams, and architectural snapshot graphs.
+              </p>
+            </div>
+
+            <div className="repo-hero-stats">
+              <div className="repo-telemetry-chip">
+                <span className="repo-telemetry-val">{repositories.length}</span>
+                <span className="repo-telemetry-lbl">Repositories</span>
+              </div>
+              <div className="repo-telemetry-chip">
+                <span className="repo-telemetry-val">{totalFiles}</span>
+                <span className="repo-telemetry-lbl">Files Tracked</span>
+              </div>
+              <div className="repo-telemetry-chip">
+                <span className="repo-telemetry-val">{totalSnapshots}</span>
+                <span className="repo-telemetry-lbl">Snapshots</span>
+              </div>
+              <button
+                onClick={loadRepositories}
+                className="repo-refresh-btn"
+                title="Refresh active repositories list"
+              >
+                <IconRefresh size={14} />
+                <span>Refresh</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="repo-unconventional-grid">
+            {repositories.length === 0 ? (
+              <div style={styles.empty}>
+                No repositories analyzed yet. Go to the Analyze tab to index your first repository.
+              </div>
+            ) : (
+              repositories.map((repo, idx) => {
+                const { displayName, displayPath, isRemote } = parseRepoInfo(repo);
+                return (
+                  <div
+                    key={repo.repo_id}
+                    className="repo-dossier-card"
+                    onClick={() => selectRepository(repo)}
+                  >
+                    <span className="repo-dossier-watermark">// {String(idx + 1).padStart(2, '0')}</span>
+
+                    <div>
+                      <div className="repo-dossier-top">
+                        <span className="repo-source-pill">
+                          {isRemote ? <IconGlobe size={12} /> : <IconFolder size={12} />}
+                          <span>{isRemote ? 'Remote GitHub' : 'Local Workspace'}</span>
+                        </span>
+                        <span className="repo-hash-badge" title={repo.repo_id}>
+                          {repo.repo_id.substring(0, 8)}
+                        </span>
+                      </div>
+
+                      <div className="repo-dossier-name-row">
+                        <h3 className="repo-dossier-title">{displayName}</h3>
+                      </div>
+
+                      <div className="repo-dossier-path" title={repo.url || repo.name}>
+                        {displayPath}
+                      </div>
+
+                      <div className="repo-dossier-metrics">
+                        <div className="repo-metric-badge">
+                          <IconFileText size={13} />
+                          <span>Files: <strong>{repo.file_count || 0}</strong></span>
+                        </div>
+                        <div className="repo-metric-badge">
+                          <IconCamera size={13} />
+                          <span>Snapshots: <strong>{repo.version_count || 0}</strong></span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="repo-dossier-footer">
+                      <span className="repo-timestamp">
+                        <IconHistory size={11} />
+                        {new Date(repo.last_analyzed).toLocaleDateString([], {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </span>
+
+                      <div className="repo-action-group">
+                        <span className="repo-inspect-cue">
+                          Explore <IconArrowRight size={13} />
+                        </span>
+
+                        {confirmDeleteId === repo.repo_id ? (
+                          <div className="repo-delete-confirm-box" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              onClick={() => deleteRepo(repo.repo_id)}
+                              disabled={deleting === repo.repo_id}
+                              className="repo-confirm-btn"
+                            >
+                              {deleting === repo.repo_id ? '...' : 'Confirm'}
+                            </button>
+                            <button
+                              onClick={() => setConfirmDeleteId(null)}
+                              className="repo-cancel-btn"
+                            >
+                              <IconX size={11} />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setConfirmDeleteId(repo.repo_id);
+                            }}
+                            disabled={deleting === repo.repo_id}
+                            className="repo-trash-btn"
+                            title="Delete from tracking"
+                          >
+                            <IconTrash size={13} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </>
       )}
 
       {activeView === 'versions' && selectedRepo && (
-        <div>
-          <button onClick={() => setActiveView('list')} style={styles.backBtn}>
-            ← Back to Repositories
+        <div className="repo-detail-container">
+          <button onClick={() => setActiveView('list')} className="repo-back-btn">
+            <IconArrowLeft size={14} />
+            <span>Back to Repositories</span>
           </button>
 
-          <div style={styles.repoDetail}>
-            <div style={styles.repoDetailHeader}>
-              <div>
-                <h3>{selectedRepo.name}</h3>
-                <p style={styles.repoUrl}>{selectedRepo.url}</p>
+          <div className="repo-detail-dossier">
+            <div className="repo-detail-top-row">
+              <div className="repo-detail-meta">
+                <div className="repo-detail-pills">
+                  <span className="repo-source-pill">
+                    {parseRepoInfo(selectedRepo).isRemote ? <IconGlobe size={12} /> : <IconFolder size={12} />}
+                    <span>{parseRepoInfo(selectedRepo).isRemote ? 'Remote GitHub' : 'Local Workspace'}</span>
+                  </span>
+                  <span className="repo-hash-badge" title={selectedRepo.repo_id}>
+                    {selectedRepo.repo_id.substring(0, 8)}
+                  </span>
+                </div>
+                <h3 className="repo-detail-title">{parseRepoInfo(selectedRepo).displayName}</h3>
+                <div className="repo-detail-url" title={selectedRepo.url || selectedRepo.name}>
+                  {selectedRepo.url || selectedRepo.name}
+                </div>
               </div>
+
               <button
                 onClick={() => importGitHistory(selectedRepo.repo_id)}
                 disabled={importingHistory}
-                style={styles.importBtn}
+                className="repo-import-action-btn"
               >
-                {importingHistory ? 'Importing...' : 'Import Git History'}
+                <IconRefresh size={14} className={importingHistory ? 'spin' : ''} />
+                <span>{importingHistory ? 'Importing Streams...' : 'Import Git History'}</span>
               </button>
             </div>
 
@@ -209,48 +337,52 @@ function RepositoryManager(props) {
               </div>
             )}
 
-            <div style={styles.statsBar}>
-              <div style={styles.statBox}>
-                <div style={styles.statNumber}>{selectedRepo.file_count}</div>
-                <div style={styles.statLabel}>Files</div>
+            <div className="repo-stats-trio">
+              <div className="repo-stat-card">
+                <div className="repo-stat-card-val">{selectedRepo.file_count || 0}</div>
+                <div className="repo-stat-card-lbl">Files Tracked</div>
               </div>
-              <div style={styles.statBox}>
-                <div style={styles.statNumber}>{selectedRepo.version_count}</div>
-                <div style={styles.statLabel}>Snapshots</div>
+              <div className="repo-stat-card">
+                <div className="repo-stat-card-val">{selectedRepo.version_count || 0}</div>
+                <div className="repo-stat-card-lbl">Total Snapshots</div>
               </div>
-              <div style={styles.statBox}>
-                <div style={styles.statNumber}>
+              <div className="repo-stat-card">
+                <div className="repo-stat-card-val">
                   {selectedRepo.version_count > 0 ? selectedRepo.version_count : 'N/A'}
                 </div>
-                <div style={styles.statLabel}>Analysis Runs</div>
+                <div className="repo-stat-card-lbl">Analysis Sequences</div>
               </div>
             </div>
           </div>
 
-          <div style={styles.tabs}>
+          <div className="repo-subnav-tabs">
             <button
               onClick={() => setActiveView('snapshots')}
-              style={{ ...styles.tab, ...(activeView === 'snapshots' ? styles.activeTab : {}), display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+              className={`repo-subnav-tab ${activeView === 'snapshots' ? 'active' : ''}`}
             >
-              <IconCamera size={14} /> Snapshots
+              <IconCamera size={14} />
+              <span>Snapshots</span>
             </button>
             <button
               onClick={() => setActiveView('versions')}
-              style={{ ...styles.tab, ...(activeView === 'versions' ? styles.activeTab : {}) }}
+              className={`repo-subnav-tab ${activeView === 'versions' ? 'active' : ''}`}
             >
-              Version History
+              <IconScroll size={14} />
+              <span>Version History</span>
             </button>
             <button
               onClick={() => setActiveView('contributors')}
-              style={{ ...styles.tab, ...(activeView === 'contributors' ? styles.activeTab : {}) }}
+              className={`repo-subnav-tab ${activeView === 'contributors' ? 'active' : ''}`}
             >
-              Contributors
+              <IconUsers size={14} />
+              <span>Contributors</span>
             </button>
             <button
               onClick={() => setActiveView('filehistory')}
-              style={{ ...styles.tab, ...(activeView === 'filehistory' ? styles.activeTab : {}) }}
+              className={`repo-subnav-tab ${activeView === 'filehistory' ? 'active' : ''}`}
             >
-              File History
+              <IconHistory size={14} />
+              <span>File History</span>
             </button>
           </div>
 
